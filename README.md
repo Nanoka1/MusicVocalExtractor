@@ -1,18 +1,41 @@
 # MusicVocalExtractor
 A simple AI music vocal separation application
 
-目标：使用 Python、Audio Separator 和预训练模型，在 Windows 11 上将音乐分离为人声和伴奏；之后添加简单的 Gradio 界面，优先使用 NVIDIA GPU。
+使用 Python、Audio Separator 和预训练模型，在 Windows 11 上将音乐分离为人声和伴奏，使用 Gradio 提供简单的操作界面，优先使用已配置好的 NVIDIA GPU。
 
-当前版本提供最基础的命令行分离功能，暂不开发界面。Gradio 将在基础功能稳定后加入。
+## Windows 双击启动
+
+1. 下载当前分支的 ZIP 并全部解压到可写文件夹，例如 `D:\MusicVocalExtractor`，不要直接在压缩包内运行。
+2. 首次使用，安装 **Python 3.12（64 位）** 和 **FFmpeg**，具体方法见下文。两者是本机前提，云端环境不会自动安装到你的电脑。
+3. 双击 **`start.bat`**。第一次会创建虚拟环境并联网安装依赖，下载可能需要几分钟。
+4. 浏览器自动打开界面后，选择 MP3、WAV、FLAC 或 M4A，点击“开始分离”。
+5. 完成后点击人声、伴奏文件下载，或直接查看程序目录下的 `outputs` 文件夹。
+
+使用时保留启动窗口，关闭它将停止软件。浏览器没有自动打开时，可使用启动窗口显示的本地地址。启动出错时窗口会保留报错；可将报错发来排查。
+
+默认首次安装 CPU 版，速度较慢；已经按下文配置好的 GPU 环境会保留。已有 `.venv` 必须是 Windows 创建的 Python 3.12 环境。启动助手不会覆盖 Linux 虚拟环境，也不会自动修复损坏的 GPU 环境。
+
+这是本机运行的浏览器界面版，尚未打包为免 Python 安装的 EXE。界面不建立公开分享链接，音乐处理在运行软件的这台电脑上完成。模型及依赖的首次下载需要联网。
+
+已经安装命令行版的用户，也可以手动运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-ui.txt
+.\.venv\Scripts\python.exe app.py
+```
 
 ## 项目结构
 
 ```text
 MusicVocalExtractor/
+├── start.bat             # Windows 双击入口
+├── start_windows.py      # 首次安装与启动助手
+├── app.py                # 简单的 Gradio 界面
 ├── check_environment.py   # 检查电脑配置，不需要额外依赖
 ├── separate.py            # 基础音频分离程序
 ├── requirements.txt       # CPU 依赖
 ├── requirements-gpu.txt   # NVIDIA GPU 依赖，二选一
+├── requirements-ui.txt    # Gradio 界面依赖
 ├── tests/test_separate.py # 输入检查和可选的真实模型测试
 ├── .venv/                # 本机虚拟环境，创建后生成
 ├── models/               # 首次运行下载的预训练模型
@@ -166,8 +189,20 @@ CC=gcc CXX=g++ .venv/bin/python -m pip install -r requirements.txt
 RUN_MODEL_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Windows 11 与 NVIDIA GPU 的运行结果需要在对应电脑验证；云端 CPU 测试不能代替这些验证。Gradio、批量处理和打包为 EXE 留待下一阶段。
+Windows 11 与 NVIDIA GPU 的运行结果需要在对应电脑验证；云端 CPU 测试不能代替这些验证。批量处理和打包为免 Python 安装的 EXE 留待后续阶段。
 
 Linux 上 Audio Separator 的 `diffq` 依赖需要编译器；以上命令使用系统已有的 GCC/G++，并要求安装 Python 开发头文件。Windows 的相应依赖为 `diffq-fixed`，Python 3.12 x64 有预编译包。
 
 云端验证记录（2026-11-03）：Python 3.12.14、PyTorch 2.8.0+cpu、torchvision 0.23.0+cpu、Audio Separator 0.48.0、librosa 0.11.0、ONNX Runtime 1.31.1、FFmpeg 7.1.5。依赖完整性检查通过；4 项输入检查及 1 项包含四种格式的真实模型测试全部通过，无跳过。模型约 53 MB，已单独核对上游发布的 SHA-256。GPU 依赖清单是 Windows 安装方案，未在 NVIDIA 硬件上验证。
+
+## 界面测试
+
+云端 Gradio 6.31.0 的 3 项界面测试已通过：未选文件、错误输入清空旧结果，以及通过本地 HTTP 服务上传 MP3、真实分离并下载两份有效 WAV。Windows 双击入口尚未在 Windows 系统实测。
+
+安装 `requirements-ui.txt` 后，可运行基础测试。额外启用真实界面测试时，会启动临时本地服务，上传合成 MP3，运行真实模型，再下载并检查两份 WAV：
+
+```powershell
+$env:RUN_UI_TESTS = "1"
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_app.py -v
+Remove-Item Env:RUN_UI_TESTS
+```
