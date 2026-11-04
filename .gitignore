@@ -1,0 +1,7 @@
+.venv/
+.venv-gpu/
+__pycache__/
+*.pyc
+models/
+outputs/
+.pytest_cache/
