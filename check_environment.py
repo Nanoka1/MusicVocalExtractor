@@ -60,13 +60,14 @@ def main():
 
     check_command("pip", [sys.executable, "-m", "pip", "--version"])
     check_command("FFmpeg", ["ffmpeg", "-version"])
+    check_command("FFprobe", ["ffprobe", "-version"])
     check_command("NVIDIA GPU", [
         "nvidia-smi", "--query-gpu=name,memory.total,driver_version",
         "--format=csv,noheader",
     ])
 
     print("\n[Installed Python packages]")
-    for package in ("audio-separator", "gradio", "torch", "onnxruntime", "onnxruntime-gpu"):
+    for package in ("audio-separator", "gradio", "torch", "onnxruntime", "onnxruntime-gpu", "pyinstaller"):
         try:
             print(f"{package}: {importlib.metadata.version(package)}")
         except importlib.metadata.PackageNotFoundError:

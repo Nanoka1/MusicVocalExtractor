@@ -1,6 +1,47 @@
 # MusicVocalExtractor
 A simple AI music vocal separation application
 
+## 本次本地升级（2026-11-04）
+
+保留原默认模型及 `start.bat`，新增模型下拉选择、MP3 320 kbps / WAV PCM 输出、真实阶段进度、音频试听，以及专用 PyInstaller onedir 构建脚本。
+
+**已配置好环境后，双击 `start.bat` 即可使用网页版本。** 首次下载源码请按下方说明准备本机 Python 3.12、FFmpeg 和项目虚拟环境。虚拟环境、模型、音频、EXE 和本地诊断资料不随 GitHub 源码分发。本机已有环境若依赖 `.tools/python312`，请保留该基础运行时。
+
+使用步骤：上传音乐 → 在「选择 AI 分离模型」选择模型 → 在「输出音频格式」选择 MP3（默认）或 WAV → 点击「开始分离」→ 试听及下载两条音轨。首次使用模型由 Audio Separator 官方机制下载并校验 SHA-256，之后复用缓存。
+
+已加入 `UVR-MDX-NET-Voc_FT.onnx`、`UVR-MDX-NET-Inst_HQ_3.onnx` 和 Demucs v4 `htdemucs.yaml`。原来的 `UVR_MDXNET_KARA_2.onnx` 仍为默认。参数及下载机制见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)。Demucs 的伴奏为 Drums、Bass、Other 相加；所有模型均根据语义标签映射音轨。
+
+MP3 通过 FFmpeg `libmp3lame -b:a 320k` 真正编码，之后检查 FFprobe 的音轨编码及比特率；WAV 保留引擎的 PCM 导出。试听及下载使用同一结果文件。每次输出独立目录，原始输入保持不变，中间 WAV 保守保留。
+
+Python 版模型和输出位于项目 `models/`、`outputs/separation_*/`。EXE 版默认位于 EXE 旁的相应目录；目录不可写时使用 `%LOCALAPPDATA%/MusicVocalExtractor/`。可通过 `MVE_DATA_DIR` 指定数据根目录；原有 `AUDIO_SEPARATOR_MODEL_DIR` 模型路径配置继续有效。缓存与结果不会写入 PyInstaller 临时解包目录。
+
+进度为真实阶段及不确定进度条，不会显示伪造的整体百分比；推理阶段包含引擎内部的 WAV 写出。首次下载的字节进度仍可在启动窗口查看。
+
+### 构建 Windows EXE
+
+在项目 PowerShell 执行：
+
+```powershell
+# 只在需要构建且尚未安装 PyInstaller 时执行，当前电脑已经装好
+.\.venv\Scripts\python.exe -m pip install pyinstaller==6.22.3
+.\build_exe.ps1
+```
+
+首次构建目标：`dist/MusicVocalExtractor/MusicVocalExtractor.exe`。必须保留整个 `MusicVocalExtractor` 文件夹及 `_internal`。重建时若目标已存在，会使用 `dist/build-时间戳/MusicVocalExtractor/`，避免删除旧版本及用户数据。脚本会复制已经下载的已知模型和参数缓存，不删除原缓存。本机已完成 EXE 启动及四个模型的实际分离验证；其他电脑上的构建仍需自行验收。本地交付报告不随源码发布。
+
+默认使用系统已有 FFmpeg/FFprobe，不需要另外安装 Python。若需要个人自用的 FFmpeg 捆绑构建，可执行 `.\build_exe.ps1 -FFmpegDir '包含ffmpeg.exe与ffprobe.exe的目录'`。也可把两个工具放在 EXE 旁的 `ffmpeg/` 文件夹；不会修改系统 PATH。许可说明见 [FFMPEG_NOTICE.md](FFMPEG_NOTICE.md)。
+
+可复现检查：
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe verify_models.py
+# 对已启动的网页或 EXE 执行 HTTP 上传、试听文件及下载验证
+.\.venv\Scripts\python.exe verify_web.py --url http://127.0.0.1:7860
+```
+
+真实模型检查使用生成的短音频，不访问个人歌曲；其通过只能证明功能与编码流程正常，歌曲分离质量仍需试听。当前环境为 CPU 版，GPU 推理没有验证。下方原有安装和 GPU 配置说明继续保留。
+
 使用 Python、Audio Separator 和预训练模型，在 Windows 11 上将音乐分离为人声和伴奏，使用 Gradio 提供简单的操作界面，优先使用已配置好的 NVIDIA GPU。
 
 ## Windows 双击启动
@@ -15,7 +56,7 @@ A simple AI music vocal separation application
 
 默认首次安装 CPU 版，速度较慢；已经按下文配置好的 GPU 环境会保留。已有 `.venv` 必须是 Windows 创建的 Python 3.12 环境。启动助手不会覆盖 Linux 虚拟环境，也不会自动修复损坏的 GPU 环境。
 
-这是本机运行的浏览器界面版，尚未打包为免 Python 安装的 EXE。界面不建立公开分享链接，音乐处理在运行软件的这台电脑上完成。模型及依赖的首次下载需要联网。
+这是本机运行的浏览器界面，EXE 构建方式与本次验证结果见上方升级说明。界面不建立公开分享链接，音乐处理在运行软件的这台电脑上完成。模型及依赖的首次下载需要联网。
 
 已经安装命令行版的用户，也可以手动运行：
 
@@ -145,17 +186,17 @@ ffprobe -version
 .\.venv\Scripts\python.exe separate.py "D:\Music\歌曲.m4a" --cpu
 ```
 
-程序使用 Audio Separator 的 `UVR_MDXNET_KARA_2.onnx` 预训练二轨模型，无需自行训练。首次运行联网下载模型及配置到 `models/`，下载过程中保持引擎自带的 SHA-256 校验。所需下载地址包括 `github.com`、`release-assets.githubusercontent.com`、`raw.githubusercontent.com`；上游可能还有备用来源。下载失败时程序会报告错误。
+程序默认使用 Audio Separator 的 `UVR_MDXNET_KARA_2.onnx` 预训练二轨模型，无需自行训练。可以通过 `--model` 选择上方已核实的其他模型。首次运行联网下载模型及配置到 `models/`，下载过程中保持引擎自带的 SHA-256 校验。所需下载地址包括 `github.com`、`release-assets.githubusercontent.com`、`raw.githubusercontent.com`；Demucs 上游还可能使用 Meta CDN。下载失败时程序会报告错误。
 
 成功后会打印实际保存位置，例如：
 
 ```text
 outputs/separation_随机字符/
-├── Vocals.wav         # 人声
-└── Instrumental.wav   # 伴奏
+├── Vocals.mp3         # 人声；选择 --format WAV 时为 .wav
+└── Instrumental.mp3   # 伴奏；选择 --format WAV 时为 .wav
 ```
 
-每次运行使用新文件夹，不覆盖之前的结果，原始音频保持不变。失败时可能留下空文件夹或不完整结果，只有显示“分离完成”才代表本次成功。输出固定为 WAV；较长音频会占用较多内存和磁盘，建议先用短音频试用。分离可能有残留或音质损失，这个基础版本不保证人声或伴奏完全纯净。
+每次运行使用新文件夹，不覆盖之前的结果，原始音频保持不变。失败时可能留下空文件夹或不完整结果，只有显示“分离完成”才代表本次成功。默认输出 MP3 320 kbps，使用 `--format WAV` 可输出 PCM WAV；较长音频会占用较多内存和磁盘，建议先用短音频试用。分离可能有残留或音质损失，需要根据歌曲试听比较模型。
 
 查看命令帮助：
 
@@ -189,7 +230,7 @@ CC=gcc CXX=g++ .venv/bin/python -m pip install -r requirements.txt
 RUN_MODEL_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Windows 11 与 NVIDIA GPU 的运行结果需要在对应电脑验证；云端 CPU 测试不能代替这些验证。批量处理和打包为免 Python 安装的 EXE 留待后续阶段。
+本次 Windows 11 CPU 验证与 EXE 状态见上方升级说明；NVIDIA GPU 尚未验证。批量处理不在本次范围内。
 
 Linux 上 Audio Separator 的 `diffq` 依赖需要编译器；以上命令使用系统已有的 GCC/G++，并要求安装 Python 开发头文件。Windows 的相应依赖为 `diffq-fixed`，Python 3.12 x64 有预编译包。
 
@@ -197,7 +238,7 @@ Linux 上 Audio Separator 的 `diffq` 依赖需要编译器；以上命令使用
 
 ## 界面测试
 
-云端 Gradio 6.31.0 的 3 项界面测试已通过：未选文件、错误输入清空旧结果，以及通过本地 HTTP 服务上传 MP3、真实分离并下载两份有效 WAV。Windows 双击入口尚未在 Windows 系统实测。
+原始云端 Gradio 6.31.0 的 3 项界面测试已通过：未选文件、错误输入清空界面结果，以及通过本地 HTTP 服务上传 MP3、真实分离并下载两份有效 WAV。本次 Windows 网页及 EXE 的上传、分离、试听文件和下载端到端检查也已通过。
 
 安装 `requirements-ui.txt` 后，可运行基础测试。额外启用真实界面测试时，会启动临时本地服务，上传合成 MP3，运行真实模型，再下载并检查两份 WAV：
 

@@ -53,7 +53,8 @@ class InterfaceIntegrationTests(unittest.TestCase):
                 client = Client(address, download_files=folder, verbose=False)
                 empty = client.predict(None, api_name="/separate")
                 self.assertEqual(empty[:2], (None, None))
-                vocals, instrumental, status = client.predict(handle_file(str(audio)), api_name="/separate")
+                vocals, instrumental, status, vocals_preview, instrumental_preview = client.predict(
+                    handle_file(str(audio)), output_format="WAV", api_name="/separate")
                 self.assertIn("分离完成", status)
                 for path in (vocals, instrumental):
                     self.assertTrue(Path(path).is_file())
