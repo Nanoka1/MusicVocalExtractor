@@ -54,7 +54,7 @@ Python 版模型和输出位于项目 `models/`、`outputs/separation_*/`。EXE 
 .\build_exe.ps1
 ```
 
-首次构建目标：`dist/MusicVocalExtractor/MusicVocalExtractor.exe`。必须保留整个 `MusicVocalExtractor` 文件夹及 `_internal`。重建时若目标已存在，会使用 `dist/build-时间戳/MusicVocalExtractor/`，避免删除旧版本及用户数据。脚本会复制已经下载的已知模型和参数缓存，不删除原缓存。本机已完成 EXE 启动及四个模型的实际分离验证；其他电脑上的构建仍需自行验收。本地交付报告不随源码发布。
+首次构建目标：`dist/MusicVocalExtractor/MusicVocalExtractor.exe`。必须保留整个 `MusicVocalExtractor` 文件夹及 `_internal`。重建时若目标已存在，会使用 `dist/build-时间戳/MusicVocalExtractor/`，避免删除旧版本及用户数据。脚本默认不复制模型；仅个人自用需要复用缓存时加 `-IncludeCachedModels`，不删除原缓存。本机已完成 EXE 启动及四个模型的实际分离验证；其他电脑上的构建仍需自行验收。本地交付报告不随源码发布。
 
 默认使用系统已有 FFmpeg/FFprobe，不需要另外安装 Python。若需要个人自用的 FFmpeg 捆绑构建，可执行 `.\build_exe.ps1 -FFmpegDir '包含ffmpeg.exe与ffprobe.exe的目录'`。也可把两个工具放在 EXE 旁的 `ffmpeg/` 文件夹；不会修改系统 PATH。许可说明见 [FFMPEG_NOTICE.md](FFMPEG_NOTICE.md)。
 
@@ -274,3 +274,7 @@ $env:RUN_UI_TESTS = "1"
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p test_app.py -v
 Remove-Item Env:RUN_UI_TESTS
 ```
+
+## 安全与许可证
+
+本项目自有代码采用 [MIT](LICENSE)。第三方依赖和模型遵循各自条款，来源与分发边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。仅限本机处理可信文件，不要公开运行服务；已知依赖风险和使用限制见 [SECURITY.md](SECURITY.md)。当前安全加固不代表已完成依赖漏洞修复或 EXE 再分发合规。

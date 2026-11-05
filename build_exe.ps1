@@ -1,4 +1,4 @@
-param([string]$FFmpegDir = "")
+param([string]$FFmpegDir = "", [switch]$IncludeCachedModels)
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
@@ -25,7 +25,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed; Python startup remains available.' }
     $package = Join-Path $distRoot 'MusicVocalExtractor'
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'FFMPEG_NOTICE.md') -Destination $package
-    # Copy only known cache files, into a new package; leave source/old caches intact.
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'THIRD_PARTY_NOTICES.md') -Destination $package
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE') -Destination $package
+    # Model redistribution rights are separate. Copy caches only for an explicit personal build.
+    if ($IncludeCachedModels) {
     $cacheNames = @('UVR_MDXNET_KARA_2.onnx', 'UVR-MDX-NET-Voc_FT.onnx',
                     'UVR-MDX-NET-Inst_HQ_3.onnx', 'htdemucs.yaml', '955717e8-8726e21a.th',
                     'download_checks.json', 'mdx_model_data.json', 'vr_model_data.json')
@@ -38,9 +41,10 @@ try {
             Copy-Item -LiteralPath $source -Destination $target
         }
     }
+    }
     Write-Host "Build files created: $package"
     Write-Host 'This is not a verified release until EXE startup and real audio separation pass.'
-    Write-Host 'Keep the entire directory, including _internal. Existing known model caches are copied; no old caches are removed.'
+    Write-Host 'Keep the entire directory, including _internal. Model caches are excluded unless -IncludeCachedModels is specified. No old caches are removed.'
 } finally {
     $env:TEMP = $oldTemp
     $env:TMP = $oldTmp
