@@ -2,6 +2,7 @@
 .venv-gpu/
 __pycache__/
 *.pyc
+/app.pyi
 models/
 outputs/
 .pytest_cache/

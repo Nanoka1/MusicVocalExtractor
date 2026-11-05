@@ -8,7 +8,7 @@
 
 - **分开人声和伴奏**：支持导入 MP3、WAV、FLAC、M4A。
 - **选择保存格式**：默认导出 MP3（320 kbps），也可以选择 WAV。
-- **切换不同模型**：内置两个 MDX 模型选项，可以比较哪种更适合这首歌；首次使用某个模型时自动下载，之后复用。
+- **切换不同模型**：可以比较哪种更适合这首歌；首次使用某个模型时自动下载，之后复用。
 - **查看处理状态**：告诉你当前正在检查文件、下载模型、分离还是导出。
 - **试听和下载**：处理完成后，两条音轨都能单独试听、下载；每次结果分开保存，原歌曲保持不变。
 
@@ -30,17 +30,17 @@
 
 ### 已实现的功能
 
-保留 `start.bat`，新增模型下拉选择、MP3 320 kbps / WAV PCM 输出、真实阶段进度、音频试听，以及专用 PyInstaller onedir 构建脚本。
+保留 `start.bat`，支持模型下拉选择、MP3 320 kbps / WAV PCM 输出、真实阶段进度、音频试听，以及专用 PyInstaller onedir 构建脚本。
 
 **已配置好环境后，双击 `start.bat` 即可使用网页版本。** 首次下载源码请按下方说明准备本机 Python 3.12、FFmpeg 和项目虚拟环境。虚拟环境、模型、音频、EXE 和本地诊断资料不随 GitHub 源码分发。本机已有环境若依赖 `.tools/python312`，请保留该基础运行时。
 
 使用步骤：上传音乐 → 在「选择 AI 分离模型」选择模型 → 在「输出音频格式」选择 MP3（默认）或 WAV → 点击「开始分离」→ 试听及下载两条音轨。首次使用模型由 Audio Separator 官方机制下载并校验 SHA-256，之后复用缓存。
 
-保留 `UVR-MDX-NET-Voc_FT.onnx`（默认）和 `UVR-MDX-NET-Inst_HQ_3.onnx`。移除 Karaoke 2 和 htdemucs 选项及四轨合成专用逻辑；不删除本机权重或缓存。
+保留 `UVR-MDX-NET-Voc_FT.onnx`（默认）、`UVR-MDX-NET-Inst_HQ_3.onnx`。移除 Karaoke 2 和 htdemucs 选项及四轨合成专用逻辑，已有模型缓存不会删除。参数及下载机制见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)。所有模型均根据语义标签映射音轨。
 
-MP3 通过 FFmpeg `libmp3lame -b:a 320k` 真正编码，之后检查 FFprobe 的音轨编码及比特率；WAV 保留引擎的 PCM 导出。试听及下载使用同一结果文件。每次输出独立目录，原始输入保持不变，中间 WAV 保守保留。
+MP3 通过 FFmpeg `libmp3lame -b:a 320k` 真正编码，检查编码、比特率、采样率和声道，并完整解码两轨。只有两轨均成功才发布，随后删除本任务临时工作目录；WAV 模式只发布两条 PCM WAV。试听及下载使用同一结果文件。失败时不显示成功，恢复 WAV 和已编码音轨保留在错误消息指出的 `cache/separation/work_*/`，不会清理历史输出。
 
-Python 版模型和输出位于项目 `models/`、`outputs/separation_*/`。EXE 版默认位于 EXE 旁的相应目录；目录不可写时使用 `%LOCALAPPDATA%/MusicVocalExtractor/`。可通过 `MVE_DATA_DIR` 指定数据根目录；原有 `AUDIO_SEPARATOR_MODEL_DIR` 模型路径配置继续有效。缓存与结果不会写入 PyInstaller 临时解包目录。
+Python 版模型和输出位于项目 `models/`、`outputs/歌曲名/`。Gradio 在预处理上传元信息时保留 `FileData.orig_name`，不将缓存路径名误当歌曲名；CLI 使用输入路径文件名。名称清理 Windows 非法字符及保留设备名，按 UTF-16 路径预算截短；通过原子 mkdir 分配同名的 `歌曲名 (2)`、`歌曲名 (3)`，支持并发，不覆盖历史。EXE 版默认位于 EXE 旁的相应目录；目录不可写时使用 `%LOCALAPPDATA%/MusicVocalExtractor/`。可通过 `MVE_DATA_DIR` 指定数据根目录；原有 `AUDIO_SEPARATOR_MODEL_DIR` 模型路径配置继续有效。
 
 进度为真实阶段及不确定进度条，不会显示伪造的整体百分比；推理阶段包含引擎内部的 WAV 写出。首次下载的字节进度仍可在启动窗口查看。
 
@@ -213,14 +213,14 @@ ffprobe -version
 .\.venv\Scripts\python.exe separate.py "D:\Music\歌曲.m4a" --cpu
 ```
 
-程序默认使用 Audio Separator 的 `UVR-MDX-NET-Voc_FT.onnx` 预训练二轨模型，无需自行训练。可以通过 `--model` 选择上方已核实的其他模型。首次运行联网下载模型及配置到 `models/`，下载过程中保持引擎自带的 SHA-256 校验。所需下载地址包括 `github.com`、`release-assets.githubusercontent.com`、`raw.githubusercontent.com`；Demucs 上游还可能使用 Meta CDN。下载失败时程序会报告错误。
+程序默认使用 `UVR-MDX-NET-Voc_FT.onnx` 预训练二轨模型，无需自行训练。可以通过 `--model` 选择其他模型。首次运行联网下载模型及配置到 `models/`，保持引擎自带的 SHA-256 校验。所需下载地址包括 `github.com`、`release-assets.githubusercontent.com`、`raw.githubusercontent.com`。下载失败时程序会报告错误。
 
 成功后会打印实际保存位置，例如：
 
 ```text
-outputs/separation_随机字符/
-├── Vocals.mp3         # 人声；选择 --format WAV 时为 .wav
-└── Instrumental.mp3   # 伴奏；选择 --format WAV 时为 .wav
+outputs/周杰伦 - 晴天/
+├── 周杰伦 - 晴天_Vocals.mp3
+└── 周杰伦 - 晴天_Instrumental.mp3
 ```
 
 每次运行使用新文件夹，不覆盖之前的结果，原始音频保持不变。失败时可能留下空文件夹或不完整结果，只有显示“分离完成”才代表本次成功。默认输出 MP3 320 kbps，使用 `--format WAV` 可输出 PCM WAV；较长音频会占用较多内存和磁盘，建议先用短音频试用。分离可能有残留或音质损失，需要根据歌曲试听比较模型。

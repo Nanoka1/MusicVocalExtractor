@@ -1,6 +1,6 @@
 # 模型和接口核实记录
 
-核实日期：2026-11-04。项目及本机安装均使用 **audio-separator 0.48.0**；没有升级分离引擎。
+核实日期：2026-11-05。项目及本机安装均使用 **audio-separator 0.48.0**；没有升级分离引擎。
 
 来源：
 
@@ -18,10 +18,12 @@
 
 `Separator.list_supported_model_files()` 在运行时确认架构和准确文件名；`download_model_and_data()` 下载并准备参数；`load_model()` 加载。下载由官方引擎先尝试其 GitHub release 镜像，再回退 UVR release 或 Meta CDN。已有文件通过 SHA-256 后复用，新文件经 `.partial` 完整性校验后原子改名。不替换第三方下载代码；本项目额外在下载前检查损坏缓存并报错保留，避免引擎自行删除旧的损坏文件。
 
-`custom_output_names` 以语义标签指定路径，不依赖返回顺序。Karaoke 2、htdemucs 及四轨合成专用逻辑已移除，保留两个 MDX；默认 Voc FT。已有权重和缓存不删除。
+`custom_output_names` 以语义标签指定路径，随后从返回路径的名称映射，不依赖返回顺序。移除 Karaoke 2 和 htdemucs 可用选项及专用四轨合成，保留两个 MDX 模型；默认 Voc FT。缓存不删除。
 
-核实 `Separator.separate()` 没有统一进度回调或任务状态 API。MDX/Demucs 内部有局部 tqdm 循环，下载也有字节进度，但不能据此得出统一的任务总百分比。本项目使用真实阶段回调和 Gradio 不确定进度条 `Progress(None)`；没有计时百分比，没有修改第三方库源码。推理阶段同时包含引擎原生 WAV 写出，后续才进入本项目的合成伴奏/格式导出及 FFprobe 检查。
+核实 `Separator.separate()` 没有统一进度回调或任务状态 API。引擎 内部有局部 tqdm 循环，下载也有字节进度，但不能据此得出统一的任务总百分比。本项目使用真实阶段回调和 Gradio 不确定进度条 `Progress(None)`；没有计时百分比，没有修改第三方库源码。推理阶段同时包含引擎原生 WAV 写出，后续才进入本项目的格式导出及 FFprobe 检查。
 
 Audio Separator 支持 `output_bitrate`，但通用导出接口未显式固定 `libmp3lame`。因此继续使用原 WAV 导出，再由 FFmpeg 参数列表 `-c:a libmp3lame -b:a 320k` 编码一次。没有 shell 命令字符串拼接。试听使用与下载一致的结果文件。
 
 真实测试日志：`.tools/model-tests.log`；机器可读报告：`test_artifacts/中文 测试 & 音频/model-test-report.json`。三秒合成信号用于验证加载、执行、映射、时长、编码和可解码性，不能代替真实歌曲音质的人工试听。
+
+成功结果目录按上传原名命名，只含两条最终音轨。临时 WAV 位于独立 cache/separation/work_*；两轨通过 FFprobe、声道/采样率和完整解码检查后发布，随后清理工作目录。失败保留恢复材料并返回错误。

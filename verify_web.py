@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import re
 import time
 from pathlib import Path
 
@@ -37,7 +38,7 @@ def main():
         job = client.submit(handle_file(str(fixture)), model, fmt, api_name="/separate")
         jobs.append((model, fmt, job))
     records = []
-    for model, fmt, job in jobs:
+    for fixture, (model, fmt, job) in zip(fixtures, jobs):
         stages = []
         responsive = False
         for update in job:
@@ -50,7 +51,7 @@ def main():
         assert responsive, "HTTP did not respond during inference or inference stage was absent"
         assert len(outputs) == 5
         for path, label in zip(outputs[:2], ("Vocals", "Instrumental")):
-            assert Path(path).name == f"{label}.{fmt.lower()}"
+            assert re.fullmatch(re.escape(fixture.stem) + r"(?: \(\d+\))?_" + label + r"\." + fmt.lower(), Path(path).name)
             verify_output(Path(path), fmt, tools)
             run_tool([tools["ffmpeg"], "-v", "error", "-i", path, "-f", "null", "-"])
         # Preview is served from the same encoded file, avoiding another lossy encode.

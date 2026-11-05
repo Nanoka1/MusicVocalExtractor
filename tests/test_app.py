@@ -10,6 +10,18 @@ from pathlib import Path
 
 @unittest.skipUnless(importlib.util.find_spec("gradio"), "未安装可选界面依赖")
 class InterfaceTests(unittest.TestCase):
+    def test_upload_metadata_survives_cached_filename(self):
+        from app import UploadedAudio, create_app
+        from gradio.data_classes import FileData
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "random_cache.mp3"
+            path.touch()
+            upload = UploadedAudio(type="filepath")
+            value = upload.preprocess(FileData(path=str(path), orig_name="原始 中文 & 歌曲.mp3"))
+            self.assertEqual(str(value), str(path))
+            self.assertEqual(value.original_name, "原始 中文 & 歌曲.mp3")
+        self.assertIsNotNone(create_app().get_config_file())
+
     def test_no_file_clears_results(self):
         from app import extract_vocals
         updates = list(extract_vocals(None))

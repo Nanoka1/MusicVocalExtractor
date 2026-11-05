@@ -1,14 +1,15 @@
 """Audio Separator wrapper: verified models, named stems and PCM/MP3 export."""
 import argparse
 import json
-import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 from models import DEFAULT_MODEL, MODELS, check_model
-from runtime_paths import MODEL_DIR, OUTPUT_DIR, PROJECT_DIR, configure_ffmpeg
+from runtime_paths import DATA_DIR, MODEL_DIR, OUTPUT_DIR, configure_ffmpeg
 
 MODEL_NAME = DEFAULT_MODEL
 SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
@@ -54,6 +55,39 @@ def verify_output(path, output_format, tools):
     return stream
 
 
+def song_title(original_name):
+    """Treat upload metadata as a filename, never as a filesystem path."""
+    leaf = str(original_name).replace("\\", "/").rsplit("/", 1)[-1]
+    title = Path(leaf).stem
+    title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(" .")
+    if not title:
+        title = "未命名歌曲"
+    if re.match(r"^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)", title, re.I):
+        title = "_" + title
+    return title
+
+
+def reserve_result_dir(output_dir, title):
+    """Atomic mkdir handles concurrent jobs; budget in Windows UTF-16 units."""
+    units = lambda text: len(str(text).encode("utf-16-le")) // 2
+    for index in range(1, 100000):
+        suffix = "" if index == 1 else f" ({index})"
+        # Full longest path: parent / title / title_Instrumental.mp3.
+        budget = (240 - units(output_dir) - 2 - units("_Instrumental.mp3")) // 2 - units(suffix)
+        if budget < 1:
+            raise ValueError("输出根目录路径过长，请选择更短的输出路径。")
+        base = title.encode("utf-16-le")[:budget * 2].decode("utf-16-le", errors="ignore").rstrip(" .") or "_"
+        if re.match(r"^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)", base, re.I):
+            base = "_" + base[:-1]
+        candidate = output_dir / (base + suffix)
+        try:
+            candidate.mkdir()
+            return candidate
+        except FileExistsError:
+            continue
+    raise RuntimeError("同名结果过多，请选择其他输出目录。")
+
+
 def prepare_model(separator, model, stage):
     """Public APIs, official downloads and SHA-256; preserve existing corrupt files too."""
     from filelock import FileLock, Timeout
@@ -86,7 +120,11 @@ def prepare_model(separator, model, stage):
             except Exception as error:
                 raise RuntimeError(f"模型下载或参数检查失败：{error}。请检查网络后重试；有效缓存会保留。") from error
             stage("正在加载 AI 模型")
-            separator.load_model(model_filename=model)
+            try:
+                separator.load_model(model_filename=model)
+            except SystemExit as error:
+                # MDXC can sys.exit(1) after a failed load; keep the UI worker alive.
+                raise RuntimeError(f"模型加载失败：{model}。请检查启动窗口日志；缓存已保留。") from error
     except Timeout as error:
         raise RuntimeError("另一个程序正在检查或下载模型，请稍后重试。") from error
 
@@ -108,29 +146,31 @@ def named_stems(returned, folder, required):
     return stems
 
 
-def export_stems(stems, result_dir, output_format, tools):
-    """Keep task WAVs on success and failure; encode MP3 exactly once."""
+def export_stems(stems, result_dir, output_format, tools, title=None):
+    """Encode and fully decode both tracks before the caller can publish/clean."""
     outputs = []
     for label in ("Vocals", "Instrumental"):
         source = stems[label]
-        verify_output(source, "WAV", tools)
-        target = result_dir / f"{label}.{output_format.lower()}"
+        original = verify_output(source, "WAV", tools)
+        target = result_dir / f"{title + '_' if title else ''}{label}.{output_format.lower()}"
         if target.exists():
             raise FileExistsError(f"结果已存在，拒绝覆盖：{target}")
         if output_format == "MP3":
             run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(source),
                       "-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", "320k", str(target)])
         else:
-            import shutil
             with target.open("xb") as destination, source.open("rb") as origin:
                 shutil.copyfileobj(origin, destination)
-        verify_output(target, output_format, tools)
+        encoded = verify_output(target, output_format, tools)
+        if (encoded["sample_rate"], encoded["channels"]) != (original["sample_rate"], original["channels"]):
+            raise RuntimeError(f"导出采样率或声道与分离音轨不一致：{target}")
+        run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-xerror", "-i", str(target), "-f", "null", "-"])
         outputs.append(target)
     return tuple(outputs)
 
 
 def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFAULT_MODEL,
-                   output_format="MP3", progress_callback=None):
+                   output_format="MP3", progress_callback=None, original_name=None):
     stage = progress_callback or (lambda message: print(message, flush=True))
     arch = check_model(model_name)
     output_format = output_format.upper()
@@ -140,8 +180,6 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     audio_path = validate_audio(audio_path)
     tools = configure_ffmpeg()
     probe_audio(audio_path, tools)
-    if cpu:
-        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
     stage("正在检查 AI 模型及运行环境")
     try:
         import torch
@@ -149,19 +187,31 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         from audio_separator.separator import Separator
     except ImportError as error:
         raise RuntimeError(f"AI 依赖未能导入：{error}。请检查项目虚拟环境。") from error
-    if torch.cuda.is_available() and arch == "MDX":
+    if not cpu and torch.cuda.is_available() and arch == "MDX":
         if hasattr(ort, "preload_dlls"):
             ort.preload_dlls()
         if "CUDAExecutionProvider" not in ort.get_available_providers():
             raise RuntimeError("ONNX Runtime 缺少 CUDA 支持，请按原 GPU 说明配置，或使用 --cpu。")
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    result_dir = Path(tempfile.mkdtemp(prefix="separation_", dir=output_dir))
-    work_dir = result_dir / "intermediate_wav"
-    work_dir.mkdir()
-    stage(f"本次结果目录：{result_dir}；正在检查 AI 模型")
+    work_root = DATA_DIR / "cache" / "separation"
+    work_root.mkdir(parents=True, exist_ok=True)
+    work_dir = Path(tempfile.mkdtemp(prefix="work_", dir=work_root))
+    try:
+        return _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
+                              output_format, tools, stage, original_name, cpu, torch)
+    except (Exception, SystemExit) as error:
+        raise RuntimeError(f"分离失败：{error}。恢复材料保留在：{work_dir}") from error
+
+
+def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
+                   output_format, tools, stage, original_name, cpu, torch):
     separator = Separator(model_file_dir=str(MODEL_DIR), output_dir=str(work_dir),
                           output_format="WAV", use_soundfile=False)
+    if cpu:
+        # Also works when CUDA was already initialized earlier in this process.
+        separator.torch_device = torch.device("cpu")
+        separator.onnx_execution_provider = ["CPUExecutionProvider"]
     prepare_model(separator, model_name, stage)
     required = ("Vocals", "Instrumental")
     stage("正在进行人声分离（AI 推理及 WAV 写出；不提供整体百分比）")
@@ -170,10 +220,22 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     for path in stems.values():
         verify_output(path, "WAV", tools)
     stage("正在导出音频" + ("：MP3 320 kbps" if output_format == "MP3" else "：WAV PCM"))
+    result_dir = reserve_result_dir(output_dir, song_title(original_name or audio_path.name))
+    staging = work_dir / "export"
+    staging.mkdir()
     try:
-        outputs = export_stems(stems, result_dir, output_format, tools)
-    except Exception as error:
-        raise RuntimeError(f"音频导出失败：{error}。本次 WAV 已保留在 {work_dir}。") from error
+        encoded = export_stems(stems, staging, output_format, tools, result_dir.name)
+        outputs = tuple(result_dir / path.name for path in encoded)
+        for source, target in zip(encoded, outputs):
+            with source.open("rb") as origin, target.open("xb") as destination:
+                shutil.copyfileobj(origin, destination)
+            verify_output(target, output_format, tools)
+    except Exception:
+        # Remove only our empty reservation; never touch history or recovery WAVs.
+        if not any(result_dir.iterdir()):
+            result_dir.rmdir()
+        raise
+    shutil.rmtree(work_dir)
     stage("分离完成")
     return outputs
 
