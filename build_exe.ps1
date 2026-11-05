@@ -31,6 +31,7 @@ try {
     if ($IncludeCachedModels) {
     $cacheNames = @('UVR-MDX-NET-Voc_FT.onnx',
                     'UVR-MDX-NET-Inst_HQ_3.onnx',
+                    'vocals_mel_band_roformer.ckpt', 'vocals_mel_band_roformer.yaml',
                     'download_checks.json', 'mdx_model_data.json', 'vr_model_data.json')
     $modelTarget = Join-Path $package 'models'
     New-Item -ItemType Directory -Force -Path $modelTarget | Out-Null

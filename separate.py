@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from models import DEFAULT_MODEL, MODELS, check_model
+from models import DEFAULT_MODEL, MODELS, ROFORMER_MODEL, check_model
 from runtime_paths import DATA_DIR, MODEL_DIR, OUTPUT_DIR, configure_ffmpeg
 
 MODEL_NAME = DEFAULT_MODEL
@@ -215,7 +215,12 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
     prepare_model(separator, model_name, stage)
     required = ("Vocals", "Instrumental")
     stage("正在进行人声分离（AI 推理及 WAV 写出；不提供整体百分比）")
-    returned = separator.separate(str(audio_path), custom_output_names={name: name for name in required})
+    output_names = {name: name for name in required}
+    if model_name == ROFORMER_MODEL:
+        # Kim's two-source training config calls the complete non-vocal mix 'other'.
+        # This alias is specific to this verified two-stem model, never four-stem Other.
+        output_names["other"] = "Instrumental"
+    returned = separator.separate(str(audio_path), custom_output_names=output_names)
     stems = named_stems(returned, work_dir, required)
     for path in stems.values():
         verify_output(path, "WAV", tools)

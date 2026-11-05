@@ -13,6 +13,7 @@
 |---|---|---|---|
 | `UVR-MDX-NET-Voc_FT.onnx` | MDX-Net / ONNX | 主轨 Vocals，互补 Instrumental | dim_f=3072, dim_t=8, n_fft=7680, compensate=1.021 |
 | `UVR-MDX-NET-Inst_HQ_3.onnx` | MDX-Net / ONNX | 主轨 Instrumental，互补 Vocals | dim_f=3072, dim_t=8, n_fft=6144, compensate=1.022 |
+| `vocals_mel_band_roformer.ckpt` | MelBand RoFormer / MDXC / PyTorch | vocals，完整非人声 other | `vocals_mel_band_roformer.yaml`：dim=384、depth=6、num_bands=60、chunk_size=352800、num_overlap=1、sample_rate=44100 |
 
 不手工硬编码 MDX 模型内部参数；由引擎用模型哈希读取官方参数。保留引擎运行默认值：MDX hop_length=1024、segment_size=256、overlap=0.25、batch_size=1、enable_denoise=false；输出采样率沿用原来的 44100 Hz。
 
@@ -27,3 +28,7 @@ Audio Separator 支持 `output_bitrate`，但通用导出接口未显式固定 `
 真实测试日志：`.tools/model-tests.log`；机器可读报告：`test_artifacts/中文 测试 & 音频/model-test-report.json`。三秒合成信号用于验证加载、执行、映射、时长、编码和可解码性，不能代替真实歌曲音质的人工试听。
 
 成功结果目录按上传原名命名，只含两条最终音轨。临时 WAV 位于独立 cache/separation/work_*；两轨通过 FFprobe、声道/采样率和完整解码检查后发布，随后清理工作目录。失败保留恢复材料并返回错误。
+
+Kim 的 YAML 将两轨命名为 vocals/other。仅对准确文件名 `vocals_mel_band_roformer.ckpt` 增加 `other -> Instrumental` 自定义输出名；这是完整伴奏，不是四轨模型的 Other，不进行四轨合成。MDX 保持原语义映射。引擎 MDXC 加载失败可能抛出 SystemExit，本项目转为可见错误，避免 Gradio 工作线程退出后无限等待。
+
+本次不升级依赖：audio-separator 0.48.0 原生支持该模型和配置，CPU/GPU 依赖文件沿用原固定版本；不额外安装 bs-roformer 或另一套训练/推理引擎。新权重首次通过官方镜像实际下载并校验；原作者文件的 SHA-256 已核对一致。许可证与完整来源见 [MODEL_RESEARCH.md](MODEL_RESEARCH.md)，测试范围见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)。默认 Voc FT 保留，真实歌曲音质未完成本机验证。

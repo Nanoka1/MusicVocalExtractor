@@ -36,7 +36,7 @@
 
 使用步骤：上传音乐 → 在「选择 AI 分离模型」选择模型 → 在「输出音频格式」选择 MP3（默认）或 WAV → 点击「开始分离」→ 试听及下载两条音轨。首次使用模型由 Audio Separator 官方机制下载并校验 SHA-256，之后复用缓存。
 
-保留 `UVR-MDX-NET-Voc_FT.onnx`（默认）、`UVR-MDX-NET-Inst_HQ_3.onnx`。移除 Karaoke 2 和 htdemucs 选项及四轨合成专用逻辑，已有模型缓存不会删除。参数及下载机制见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)。所有模型均根据语义标签映射音轨。
+保留 `UVR-MDX-NET-Voc_FT.onnx`（默认）、`UVR-MDX-NET-Inst_HQ_3.onnx`，新增 **MelBand RoFormer · Kim**（`vocals_mel_band_roformer.ckpt`）。新模型权重约 913 MB，首次自动下载，CPU 较慢；Windows CPU 加载与推理已验证，GPU 未实测。默认仍用 Voc FT，因为尚未完成真实歌曲音质 AB 验证。移除 Karaoke 2 和 htdemucs 选项及四轨合成专用逻辑，已有模型缓存不会删除。参数见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)，六个候选的实时 Star、质量与许可比较见 [MODEL_RESEARCH.md](MODEL_RESEARCH.md)，本轮实测范围见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)。
 
 MP3 通过 FFmpeg `libmp3lame -b:a 320k` 真正编码，检查编码、比特率、采样率和声道，并完整解码两轨。只有两轨均成功才发布，随后删除本任务临时工作目录；WAV 模式只发布两条 PCM WAV。试听及下载使用同一结果文件。失败时不显示成功，恢复 WAV 和已编码音轨保留在错误消息指出的 `cache/separation/work_*/`，不会清理历史输出。
 
@@ -54,7 +54,7 @@ Python 版模型和输出位于项目 `models/`、`outputs/歌曲名/`。Gradio 
 .\build_exe.ps1
 ```
 
-首次构建目标：`dist/MusicVocalExtractor/MusicVocalExtractor.exe`。必须保留整个 `MusicVocalExtractor` 文件夹及 `_internal`。重建时若目标已存在，会使用 `dist/build-时间戳/MusicVocalExtractor/`，避免删除旧版本及用户数据。脚本默认不复制模型；仅个人自用需要复用缓存时加 `-IncludeCachedModels`，不删除原缓存。本机已完成 EXE 启动及四个模型的实际分离验证；其他电脑上的构建仍需自行验收。本地交付报告不随源码发布。
+首次构建目标：`dist/MusicVocalExtractor/MusicVocalExtractor.exe`。必须保留整个 `MusicVocalExtractor` 文件夹及 `_internal`。重建时若目标已存在，会使用 `dist/build-时间戳/MusicVocalExtractor/`，避免删除旧版本及用户数据。脚本默认不复制模型；仅个人自用需要复用缓存时加 `-IncludeCachedModels`，不删除原缓存。打包配置包含 RoFormer 动态模块；本轮构建和运行的实际验证范围见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)，旧版本的四模型测试不代表当前构建验收。
 
 默认使用系统已有 FFmpeg/FFprobe，不需要另外安装 Python。若需要个人自用的 FFmpeg 捆绑构建，可执行 `.\build_exe.ps1 -FFmpegDir '包含ffmpeg.exe与ffprobe.exe的目录'`。也可把两个工具放在 EXE 旁的 `ffmpeg/` 文件夹；不会修改系统 PATH。许可说明见 [FFMPEG_NOTICE.md](FFMPEG_NOTICE.md)。
 
@@ -215,6 +215,12 @@ ffprobe -version
 
 程序默认使用 `UVR-MDX-NET-Voc_FT.onnx` 预训练二轨模型，无需自行训练。可以通过 `--model` 选择其他模型。首次运行联网下载模型及配置到 `models/`，保持引擎自带的 SHA-256 校验。所需下载地址包括 `github.com`、`release-assets.githubusercontent.com`、`raw.githubusercontent.com`。下载失败时程序会报告错误。
 
+使用新模型（CPU 示例；下载约 913 MB，只需首次联网）：
+
+```powershell
+.\.venv\Scripts\python.exe separate.py "D:\Music\周杰伦 - 晴天.mp3" --model vocals_mel_band_roformer.ckpt --format MP3 --cpu
+```
+
 成功后会打印实际保存位置，例如：
 
 ```text
@@ -257,7 +263,7 @@ CC=gcc CXX=g++ .venv/bin/python -m pip install -r requirements.txt
 RUN_MODEL_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-本次 Windows 11 CPU 验证与 EXE 状态见上方升级说明；NVIDIA GPU 尚未验证。批量处理不在本次范围内。
+当前 Windows 11 CPU 验证与 EXE 状态见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)；NVIDIA GPU 尚未验证。批量处理不在本次范围内。
 
 Linux 上 Audio Separator 的 `diffq` 依赖需要编译器；以上命令使用系统已有的 GCC/G++，并要求安装 Python 开发头文件。Windows 的相应依赖为 `diffq-fixed`，Python 3.12 x64 有预编译包。
 

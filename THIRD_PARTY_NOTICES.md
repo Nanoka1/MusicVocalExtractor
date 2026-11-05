@@ -5,6 +5,7 @@
 | 组件 | 许可 / 官方来源 |
 | --- | --- |
 | Audio Separator | MIT；https://github.com/nomadkaraoke/python-audio-separator |
+| Kim MelBand RoFormer 权重 | 作者权重卡标注 MIT；https://huggingface.co/KimberleyJSN/melbandroformer 。通过 MIT 的 Audio Separator 推理，不复制作者 GitHub 仓库源码；原始权重与镜像 SHA-256 一致。详见 [MODEL_RESEARCH.md](MODEL_RESEARCH.md) |
 | Ultimate Vocal Remover (UVR) | MIT 代码；感谢 Anjok07、UVR 开发者以及 MDX-Net 作者 Kuielab、Woosung Choi；https://github.com/Anjok07/ultimatevocalremovergui |
 | Demucs | MIT 代码；Copyright Meta Platforms, Inc. and affiliates；https://github.com/facebookresearch/demucs |
 | PyTorch / torchvision | BSD 类许可证；https://github.com/pytorch/pytorch 、https://github.com/pytorch/vision |
