@@ -163,22 +163,13 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     separator = Separator(model_file_dir=str(MODEL_DIR), output_dir=str(work_dir),
                           output_format="WAV", use_soundfile=False)
     prepare_model(separator, model_name, stage)
-    required = ("Vocals", "Drums", "Bass", "Other") if arch == "Demucs" else ("Vocals", "Instrumental")
+    required = ("Vocals", "Instrumental")
     stage("正在进行人声分离（AI 推理及 WAV 写出；不提供整体百分比）")
     returned = separator.separate(str(audio_path), custom_output_names={name: name for name in required})
     stems = named_stems(returned, work_dir, required)
     for path in stems.values():
         verify_output(path, "WAV", tools)
     stage("正在导出音频" + ("：MP3 320 kbps" if output_format == "MP3" else "：WAV PCM"))
-    if arch == "Demucs":
-        instrumental = work_dir / "Instrumental.wav"
-        command = [tools["ffmpeg"], "-nostdin", "-v", "error", "-n"]
-        for name in ("Drums", "Bass", "Other"):
-            command.extend(["-i", str(stems[name])])
-        command.extend(["-filter_complex", "[0:a][1:a][2:a]amix=inputs=3:normalize=0:dropout_transition=0[out]",
-                        "-map", "[out]", "-c:a", "pcm_s24le", str(instrumental)])
-        run_tool(command)
-        stems["Instrumental"] = instrumental
     try:
         outputs = export_stems(stems, result_dir, output_format, tools)
     except Exception as error:

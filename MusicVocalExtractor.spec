@@ -16,7 +16,6 @@ for distribution in ("audio-separator", "gradio", "gradio-client", "torch", "onn
 
 hiddenimports = [
     "audio_separator.separator.architectures.mdx_separator",
-    "audio_separator.separator.architectures.demucs_separator",
     "uvicorn.logging", "uvicorn.loops.auto", "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets.auto", "uvicorn.lifespan.on",
 ]

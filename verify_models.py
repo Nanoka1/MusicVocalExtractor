@@ -28,7 +28,7 @@ def main():
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (wav, mp3)}
     cases = [(DEFAULT_MODEL, wav, "WAV"), (DEFAULT_MODEL, mp3, "MP3"),
              ("UVR-MDX-NET-Voc_FT.onnx", mp3, "MP3"),
-             ("UVR-MDX-NET-Inst_HQ_3.onnx", wav, "WAV"), ("htdemucs.yaml", wav, "MP3")]
+             ("UVR-MDX-NET-Inst_HQ_3.onnx", wav, "WAV")]
     report = []
     for model, source, fmt in cases:
         start = time.perf_counter()

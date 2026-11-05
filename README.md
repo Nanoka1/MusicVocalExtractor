@@ -8,7 +8,7 @@
 
 - **分开人声和伴奏**：支持导入 MP3、WAV、FLAC、M4A。
 - **选择保存格式**：默认导出 MP3（320 kbps），也可以选择 WAV。
-- **切换不同模型**：内置四个模型选项，可以比较哪种更适合这首歌；首次使用某个模型时自动下载，之后复用。
+- **切换不同模型**：内置两个 MDX 模型选项，可以比较哪种更适合这首歌；首次使用某个模型时自动下载，之后复用。
 - **查看处理状态**：告诉你当前正在检查文件、下载模型、分离还是导出。
 - **试听和下载**：处理完成后，两条音轨都能单独试听、下载；每次结果分开保存，原歌曲保持不变。
 
@@ -30,13 +30,13 @@
 
 ### 已实现的功能
 
-保留原默认模型及 `start.bat`，新增模型下拉选择、MP3 320 kbps / WAV PCM 输出、真实阶段进度、音频试听，以及专用 PyInstaller onedir 构建脚本。
+保留 `start.bat`，新增模型下拉选择、MP3 320 kbps / WAV PCM 输出、真实阶段进度、音频试听，以及专用 PyInstaller onedir 构建脚本。
 
 **已配置好环境后，双击 `start.bat` 即可使用网页版本。** 首次下载源码请按下方说明准备本机 Python 3.12、FFmpeg 和项目虚拟环境。虚拟环境、模型、音频、EXE 和本地诊断资料不随 GitHub 源码分发。本机已有环境若依赖 `.tools/python312`，请保留该基础运行时。
 
 使用步骤：上传音乐 → 在「选择 AI 分离模型」选择模型 → 在「输出音频格式」选择 MP3（默认）或 WAV → 点击「开始分离」→ 试听及下载两条音轨。首次使用模型由 Audio Separator 官方机制下载并校验 SHA-256，之后复用缓存。
 
-已加入 `UVR-MDX-NET-Voc_FT.onnx`、`UVR-MDX-NET-Inst_HQ_3.onnx` 和 Demucs v4 `htdemucs.yaml`。原来的 `UVR_MDXNET_KARA_2.onnx` 仍为默认。参数及下载机制见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)。Demucs 的伴奏为 Drums、Bass、Other 相加；所有模型均根据语义标签映射音轨。
+保留 `UVR-MDX-NET-Voc_FT.onnx`（默认）和 `UVR-MDX-NET-Inst_HQ_3.onnx`。移除 Karaoke 2 和 htdemucs 选项及四轨合成专用逻辑；不删除本机权重或缓存。
 
 MP3 通过 FFmpeg `libmp3lame -b:a 320k` 真正编码，之后检查 FFprobe 的音轨编码及比特率；WAV 保留引擎的 PCM 导出。试听及下载使用同一结果文件。每次输出独立目录，原始输入保持不变，中间 WAV 保守保留。
 
@@ -213,7 +213,7 @@ ffprobe -version
 .\.venv\Scripts\python.exe separate.py "D:\Music\歌曲.m4a" --cpu
 ```
 
-程序默认使用 Audio Separator 的 `UVR_MDXNET_KARA_2.onnx` 预训练二轨模型，无需自行训练。可以通过 `--model` 选择上方已核实的其他模型。首次运行联网下载模型及配置到 `models/`，下载过程中保持引擎自带的 SHA-256 校验。所需下载地址包括 `github.com`、`release-assets.githubusercontent.com`、`raw.githubusercontent.com`；Demucs 上游还可能使用 Meta CDN。下载失败时程序会报告错误。
+程序默认使用 Audio Separator 的 `UVR-MDX-NET-Voc_FT.onnx` 预训练二轨模型，无需自行训练。可以通过 `--model` 选择上方已核实的其他模型。首次运行联网下载模型及配置到 `models/`，下载过程中保持引擎自带的 SHA-256 校验。所需下载地址包括 `github.com`、`release-assets.githubusercontent.com`、`raw.githubusercontent.com`；Demucs 上游还可能使用 Meta CDN。下载失败时程序会报告错误。
 
 成功后会打印实际保存位置，例如：
 
