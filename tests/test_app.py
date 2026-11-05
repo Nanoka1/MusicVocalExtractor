@@ -80,7 +80,8 @@ class InterfaceIntegrationTests(unittest.TestCase):
                     response.raise_for_status()
                     upload = {"path": response.json()[0], "orig_name": "周杰伦 - 晴天.mp3",
                               "meta": {"_type": "gradio.FileData"}}
-                    response = httpx.post(api + "/call/separate", json={"data": [upload, ROFORMER_MODEL, "MP3"]})
+                    requested = "cuda" if torch.cuda.is_available() else "cpu"
+                    response = httpx.post(api + "/call/separate", json={"data": [upload, ROFORMER_MODEL, "MP3", "balanced", requested]})
                     response.raise_for_status()
                     files = None
                     event = None

@@ -1,53 +1,48 @@
-param([string]$FFmpegDir = "", [switch]$IncludeCachedModels)
+param([string]$FFmpegDir = '', [switch]$Cpu, [switch]$IncludeCachedModels)
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
-$python = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $python)) { throw 'Project .venv with Python 3.12 is required.' }
-& $python -c 'import sys; assert sys.version_info[:2] == (3, 12); import torch, onnxruntime, gradio; from audio_separator.separator import Separator; import PyInstaller'
-if ($LASTEXITCODE -ne 0) { throw 'Dependency check failed. Build does not install or upgrade packages.' }
+if ($IncludeCachedModels) { throw 'Models are shared through runtime-config.json; embedding duplicate caches is no longer supported.' }
+$flavor = if ($Cpu) { 'CPU' } else { 'GPU' }
+$environment = if ($Cpu) { '.venv' } else { '.venv-gpu' }
+$python = Join-Path $PSScriptRoot "$environment\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $python)) { throw "Missing isolated $environment. See GPU_ACCELERATION.md." }
+$distRoot = Join-Path $PSScriptRoot "dist\candidate-$($flavor.ToLower())"
+$package = Join-Path $distRoot 'MusicVocalExtractor'
+if (Test-Path -LiteralPath $package) { throw "Existing candidate is preserved: $package. Verify/publish it or review it before building again." }
+& $python -X utf8 -c 'import sys; assert sys.version_info[:2] == (3,12); import gradio, PyInstaller; from audio_separator.separator import Separator'
+if ($LASTEXITCODE -ne 0) { throw 'Dependency check failed; nothing installed or repaired.' }
+if (-not $Cpu) {
+    & $python -X utf8 verify_gpu.py
+    if ($LASTEXITCODE -ne 0) { throw 'Real CUDA preflight failed; GPU build stopped and all old packages preserved.' }
+}
 $tempFolder = Join-Path $PSScriptRoot '.tools\build-tmp'
 New-Item -ItemType Directory -Force -Path $tempFolder | Out-Null
 $oldTemp = $env:TEMP
 $oldTmp = $env:TMP
 $oldFFmpeg = $env:MVE_FFMPEG_DIR
+$oldFlavor = $env:MVE_BUILD_FLAVOR
 try {
     $env:TEMP = $tempFolder
     $env:TMP = $tempFolder
-    if ($FFmpegDir) { $env:MVE_FFMPEG_DIR = (Resolve-Path -LiteralPath $FFmpegDir).Path }
-    else { $env:MVE_FFMPEG_DIR = $null }
-    # A timestamped build avoids deleting/overwriting any previous executable or its user data.
-    $buildId = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $distRoot = Join-Path $PSScriptRoot 'dist'
-    if (Test-Path -LiteralPath (Join-Path $distRoot 'MusicVocalExtractor')) {
-        $distRoot = Join-Path $distRoot "build-$buildId"
+    $env:MVE_BUILD_FLAVOR = $flavor
+    $env:MVE_FFMPEG_DIR = if ($FFmpegDir) { (Resolve-Path -LiteralPath $FFmpegDir).Path } else { $null }
+    & $python -X utf8 -m PyInstaller --distpath $distRoot --workpath "build\$($flavor.ToLower())" MusicVocalExtractor.spec
+    if ($LASTEXITCODE -ne 0) { throw 'Build failed; candidate kept for diagnosis. Old releases were not changed.' }
+    foreach ($name in @('FFMPEG_NOTICE.md','THIRD_PARTY_NOTICES.md','LICENSE')) {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $package
     }
-    & $python -X utf8 -m PyInstaller --distpath $distRoot --workpath "build\$buildId" MusicVocalExtractor.spec
-    if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed; Python startup remains available.' }
-    $package = Join-Path $distRoot 'MusicVocalExtractor'
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'FFMPEG_NOTICE.md') -Destination $package
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'THIRD_PARTY_NOTICES.md') -Destination $package
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE') -Destination $package
-    # Model redistribution rights are separate. Copy caches only for an explicit personal build.
-    if ($IncludeCachedModels) {
-    $cacheNames = @('UVR-MDX-NET-Voc_FT.onnx',
-                    'UVR-MDX-NET-Inst_HQ_3.onnx',
-                    'vocals_mel_band_roformer.ckpt', 'vocals_mel_band_roformer.yaml',
-                    'download_checks.json', 'mdx_model_data.json', 'vr_model_data.json')
-    $modelTarget = Join-Path $package 'models'
-    New-Item -ItemType Directory -Force -Path $modelTarget | Out-Null
-    foreach ($cacheName in $cacheNames) {
-        $source = Join-Path (Join-Path $PSScriptRoot 'models') $cacheName
-        $target = Join-Path $modelTarget $cacheName
-        if ((Test-Path -LiteralPath $source) -and -not (Test-Path -LiteralPath $target)) {
-            Copy-Item -LiteralPath $source -Destination $target
-        }
-    }
-    }
-    Write-Host "Build files created: $package"
-    Write-Host 'This is not a verified release until EXE startup and real audio separation pass.'
-    Write-Host 'Keep the entire directory, including _internal. Model caches are excluded unless -IncludeCachedModels is specified. No old caches are removed.'
+    # Local deployment configuration only; model/data directories are never moved or copied.
+    @{ data_dir=$PSScriptRoot; model_dir=(Join-Path $PSScriptRoot 'models') } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $package 'runtime-config.json') -Encoding UTF8
+    @{ flavor=$flavor; source_commit=(git rev-parse HEAD); built_at=(Get-Date -Format o) } |
+        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $package 'build-info.json') -Encoding UTF8
+    Write-Host "Candidate: $package"
+    Write-Host 'Not a release until frozen GPU model proof and HTTP verification pass.'
+    Write-Host "Next: $python verify_release.py --package `"$package`""
+    Write-Host 'No old builds, weights, environments, outputs or user settings were removed.'
 } finally {
-    $env:TEMP = $oldTemp
-    $env:TMP = $oldTmp
-    $env:MVE_FFMPEG_DIR = $oldFFmpeg
+    $env:TEMP=$oldTemp
+    $env:TMP=$oldTmp
+    $env:MVE_FFMPEG_DIR=$oldFFmpeg
+    $env:MVE_BUILD_FLAVOR=$oldFlavor
 }

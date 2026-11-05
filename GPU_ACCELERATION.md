@@ -27,3 +27,40 @@ ORT 预加载项目 GPU torch/lib 中的 CUDA/cuDNN DLL；模型加载后检查�
 原名命名、MP3 320 kbps、成功目录只含两个最终文件及失败保留恢复材料的规则继续有效。权重、环境、音频、日志、性能报告及构建产物均不提交 Git。
 
 P0 实测通过：ORT GPU 1.22.0、cuDNN 9.10.2、`pip check` 正常；两个 MDX 的实际 CUDA 节点执行和 Kim RoFormer 的 CUDA 参数/输入/输出均已确认。3 秒合成音频的 RoFormer 测试发生 2 次 CUDA 前向，PyTorch 峰值分配 1,839,783,424 字节。只证明功能，不表示真实歌曲质量认证或整曲峰值显存。原始证据在已忽略的 `test_artifacts/gpu-preflight.json`、`test_artifacts/gpu-model-proof/report.json` 及 ORT profiling，控制台日志 `.tools/gpu-p0-model-proof.log`。
+
+## 性能模式与计时
+
+界面及 CLI `--performance quality|balanced|fast`（默认 balanced）使用真正不同的参数：
+
+| 模型 | 高质量 | 平衡 | 快速 |
+|---|---|---|---|
+| Kim RoFormer | FP32、overlap=4 | CUDA autocast、overlap=2 | CUDA autocast、overlap=1 |
+| 两个 MDX | ONNX、overlap=.5 | ONNX、overlap=.25 | ONNX、overlap=.1 |
+
+RoFormer 分段按作者 8 秒推荐值设置 segment_size=801（441 hop），显存空闲不足 5/3 GiB 时分别降低到 501/301；CPU 使用 FP32。batch_size 固定 1：0.48.0 的 RoFormer 路径实际上忽略批量参数，因此不宣称调大它有加速效果。保留原生 FP16 和 torch.compile 为关闭状态，混合精度须以实测结果决定是否验收。
+
+前向钩子检查实际参数/输入设备和输出 NaN/Inf。CUDA OOM 最多降低一次 segment_size，并使用独立重试目录，仍失败则明确报错，不静默回退 CPU，不发布半成品；可主动选择 CPU 或高质量 FP32。计时明确区分模型准备（含校验/下载）、引擎加载、AI 分离（含解码/WAV 写出）、最终导出及完整校验、总时间；不能把 WAV 写出误称为纯 GPU kernel 耗时。
+
+`benchmark_gpu.py` 默认使用同一段 16 秒合成音频，CPU 4 线程。CPU FP32 基准实测：加载 2.85 秒、准备 7.14 秒、AI 分离 62.85 秒、导出验证 0.99 秒、总计 73.20 秒。随后独显从系统在线列表消失，NVIDIA PnP 状态 Unknown、核显 OK，nvidia-smi 报权限不足；新进程 CUDA 也不可用。**GPU 三种模式与原生 FP16 的后续基准尚未完成，不能填写加速倍数、音质结论或宣称新模式完成 GPU 验收。** 已暂停这些改动的发布，保留 P0 成功时的原始证据。CPU 环境完整 26 项回归通过、无跳过。
+
+## 构建及共享缓存
+
+后续构建使用 `.venv-gpu`，默认必须先通过真实 CUDA 预检；`-Cpu` 才选择原 CPU 环境。不重装依赖，不清空 dist。使用固定 `dist/candidate-gpu/MusicVocalExtractor/` 和 `build/gpu/`，已有候选则停止而不叠加时间戳目录。
+
+候选的本地 `runtime-config.json` 指向项目现有数据/模型目录，跨版本复用校验过的缓存，不复制或移动权重；不再使用 `-IncludeCachedModels`。分发到其他位置/电脑前应调整该本地路径配置，不能随意删除原缓存。现有旧 EXE 的目录与数据不受影响。
+
+GPU 恢复后运行：
+
+```powershell
+.\.venv-gpu\Scripts\python.exe verify_gpu.py
+.\.venv-gpu\Scripts\python.exe benchmark_gpu.py
+.\build_exe.ps1
+.\.venv-gpu\Scripts\python.exe verify_release.py --package dist/candidate-gpu/MusicVocalExtractor
+.\.venv-gpu\Scripts\python.exe publish_release.py
+# 上一条预览通过后才执行：
+.\.venv-gpu\Scripts\python.exe publish_release.py --publish
+```
+
+冻结程序提供 `--gpu-check` 和 `--verify-gpu-models`，分别实测 CUDA 矩阵运算和三个模型的 GPU 证据。发布验证还启动真实 EXE 网页、使用 CUDA 平衡模式分离并检查下载/试听一致性，生成文件 SHA-256 清单。发布仅将通过验收且未被修改的候选移动到新的 `dist/MusicVocalExtractor-GPU/`，不覆盖旧正式目录；已有 GPU 正式版时停止，需先审查回退方案，不自动删除任何历史。
+
+**当前由于独显不可用，新的 GPU EXE 尚未构建/验收/发布，旧可用 EXE 均保留。** 按 P0→P1→P2→P3 顺序，历史构建清理尚未执行；删除始终需要下一次明确授权，不因本轮任务自动执行。

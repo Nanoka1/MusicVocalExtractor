@@ -6,11 +6,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from models import DEFAULT_MODEL, MODELS, ROFORMER_MODEL, check_model
 from runtime_paths import DATA_DIR, MODEL_DIR, OUTPUT_DIR, configure_ffmpeg
 from gpu_runtime import device_info, preload_onnx_cuda, select_device, validate_loaded_device
+from performance import inference_options, infer_with_retry
 
 MODEL_NAME = DEFAULT_MODEL
 SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
@@ -89,7 +91,7 @@ def reserve_result_dir(output_dir, title):
     raise RuntimeError("同名结果过多，请选择其他输出目录。")
 
 
-def prepare_model(separator, model, stage):
+def prepare_model(separator, model, stage, metrics=None):
     """Public APIs, official downloads and SHA-256; preserve existing corrupt files too."""
     from filelock import FileLock, Timeout
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -121,11 +123,14 @@ def prepare_model(separator, model, stage):
             except Exception as error:
                 raise RuntimeError(f"模型下载或参数检查失败：{error}。请检查网络后重试；有效缓存会保留。") from error
             stage("正在加载 AI 模型")
+            load_start = time.perf_counter()
             try:
                 separator.load_model(model_filename=model)
             except SystemExit as error:
                 # MDXC can sys.exit(1) after a failed load; keep the UI worker alive.
                 raise RuntimeError(f"模型加载失败：{model}。请检查启动窗口日志；缓存已保留。") from error
+            if metrics is not None:
+                metrics["load_seconds"] = time.perf_counter() - load_start
     except Timeout as error:
         raise RuntimeError("另一个程序正在检查或下载模型，请稍后重试。") from error
 
@@ -171,7 +176,9 @@ def export_stems(stems, result_dir, output_format, tools, title=None):
 
 
 def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFAULT_MODEL,
-                   output_format="MP3", progress_callback=None, original_name=None, device="auto"):
+                   output_format="MP3", progress_callback=None, original_name=None, device="auto",
+                   performance_mode="balanced", metrics_callback=None):
+    total_start = time.perf_counter()
     stage = progress_callback or (lambda message: print(message, flush=True))
     arch = check_model(model_name)
     output_format = output_format.upper()
@@ -190,6 +197,11 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         raise RuntimeError(f"AI 依赖未能导入：{error}。请检查项目虚拟环境。") from error
     selected = select_device(device, cpu)
     info = device_info(selected)
+    stats = dict(info, mode=performance_mode, oom_retries=0)
+    options = inference_options(model_name, performance_mode, selected, info.get("free_bytes"))
+    stats["options"] = options
+    if selected == "cuda":
+        torch.cuda.reset_peak_memory_stats()
     stage(f"推理设备：{info['name']}（{selected.upper()}）；PyTorch {info['torch']}")
     if selected == "cuda" and arch == "MDX":
         preload_onnx_cuda()
@@ -199,21 +211,31 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     work_root.mkdir(parents=True, exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(prefix="work_", dir=work_root))
     try:
-        return _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
-                              output_format, tools, stage, original_name, selected == "cpu", torch)
+        outputs = _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
+                                 output_format, tools, stage, original_name, selected == "cpu", torch,
+                                 options=options, metrics=stats)
+        stats["total_seconds"] = time.perf_counter() - total_start
+        if selected == "cuda":
+            stats["peak_bytes"] = torch.cuda.max_memory_allocated()
+        if metrics_callback:
+            metrics_callback(stats)
+        return outputs
     except (Exception, SystemExit) as error:
         raise RuntimeError(f"分离失败：{error}。恢复材料保留在：{work_dir}") from error
 
 
 def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
-                   output_format, tools, stage, original_name, cpu, torch):
+                   output_format, tools, stage, original_name, cpu, torch, options=None, metrics=None):
+    metrics = metrics if metrics is not None else {}
+    prepare_start = time.perf_counter()
     separator = Separator(model_file_dir=str(MODEL_DIR), output_dir=str(work_dir),
-                          output_format="WAV", use_soundfile=False)
+                          output_format="WAV", use_soundfile=False, **(options or {}))
     if cpu:
         # Also works when CUDA was already initialized earlier in this process.
         separator.torch_device = torch.device("cpu")
         separator.onnx_execution_provider = ["CPUExecutionProvider"]
-    prepare_model(separator, model_name, stage)
+    prepare_model(separator, model_name, stage, metrics=metrics)
+    metrics["prepare_seconds"] = time.perf_counter() - prepare_start
     validate_loaded_device(separator, check_model(model_name), "cpu" if cpu else "cuda")
     required = ("Vocals", "Instrumental")
     stage("正在进行人声分离（AI 推理及 WAV 写出；不提供整体百分比）")
@@ -222,11 +244,17 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
         # Kim's two-source training config calls the complete non-vocal mix 'other'.
         # This alias is specific to this verified two-stem model, never four-stem Other.
         output_names["other"] = "Instrumental"
-    returned = separator.separate(str(audio_path), custom_output_names=output_names)
-    stems = named_stems(returned, work_dir, required)
+    inference_start = time.perf_counter()
+    returned, stem_dir = infer_with_retry(separator, audio_path, output_names, work_dir, model_name,
+                                          "cpu" if cpu else "cuda", metrics, stage)
+    if not cpu:
+        torch.cuda.synchronize()
+    metrics["inference_seconds"] = time.perf_counter() - inference_start
+    stems = named_stems(returned, stem_dir, required)
     for path in stems.values():
         verify_output(path, "WAV", tools)
     stage("正在导出音频" + ("：MP3 320 kbps" if output_format == "MP3" else "：WAV PCM"))
+    export_start = time.perf_counter()
     result_dir = reserve_result_dir(output_dir, song_title(original_name or audio_path.name))
     staging = work_dir / "export"
     staging.mkdir()
@@ -243,6 +271,7 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
             result_dir.rmdir()
         raise
     shutil.rmtree(work_dir)
+    metrics["export_seconds"] = time.perf_counter() - export_start
     stage("分离完成")
     return outputs
 
@@ -256,9 +285,13 @@ def main():
     devices.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--model", choices=list(MODELS), default=DEFAULT_MODEL)
     parser.add_argument("--format", choices=["MP3", "WAV"], default="MP3")
+    parser.add_argument("--performance", choices=["quality", "balanced", "fast"], default="balanced")
     args = parser.parse_args()
     try:
-        vocals, instrumental = separate_audio(args.audio, args.output_dir, args.cpu, args.model, args.format, device=args.device)
+        from performance import format_metrics
+        vocals, instrumental = separate_audio(args.audio, args.output_dir, args.cpu, args.model, args.format,
+                                              device=args.device, performance_mode=args.performance,
+                                              metrics_callback=lambda stats: print(format_metrics(stats)))
     except Exception as error:
         print(f"分离失败：{error}", file=sys.stderr)
         return 1

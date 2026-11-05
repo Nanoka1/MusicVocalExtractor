@@ -1,5 +1,7 @@
 # MusicVocalExtractor
 
+RTX 5060 GPU 环境、三种性能模式和候选 EXE 的验证流程见 [GPU_ACCELERATION.md](GPU_ACCELERATION.md)。本轮已完成三个模型的真实 CUDA 证据；后续验证期间独显离线，新的性能模式与 GPU EXE 尚未完成 GPU 验收，旧可用版本全部保留。
+
 一个在自己电脑上使用的 **AI 人声与伴奏分离工具**。
 
 放入一首歌，点击“开始分离”，就能得到两份音频：一份是**人声**，另一份是**伴奏**。可以直接试听，也可以保存下来，用来练唱、练耳或学习歌曲。
@@ -49,12 +51,13 @@ Python 版模型和输出位于项目 `models/`、`outputs/歌曲名/`。Gradio 
 在项目 PowerShell 执行：
 
 ```powershell
-# 只在需要构建且尚未安装 PyInstaller 时执行，当前电脑已经装好
-.\.venv\Scripts\python.exe -m pip install pyinstaller==6.22.3
+# GPU 环境安装与预检见 GPU_ACCELERATION.md；构建不自动安装依赖
+.\.venv-gpu\Scripts\python.exe -m pip install pyinstaller==6.22.3
 .\build_exe.ps1
+# 明确构建 CPU 候选时：.\build_exe.ps1 -Cpu
 ```
 
-首次构建目标：`dist/MusicVocalExtractor/MusicVocalExtractor.exe`。必须保留整个 `MusicVocalExtractor` 文件夹及 `_internal`。重建时若目标已存在，会使用 `dist/build-时间戳/MusicVocalExtractor/`，避免删除旧版本及用户数据。脚本默认不复制模型；仅个人自用需要复用缓存时加 `-IncludeCachedModels`，不删除原缓存。打包配置包含 RoFormer 动态模块；本轮构建和运行的实际验证范围见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)，旧版本的四模型测试不代表当前构建验收。
+新构建目标为固定的 `dist/candidate-gpu/MusicVocalExtractor/`（CPU 为 candidate-cpu）。候选存在时停止，不自动覆盖或生成更多时间戳目录。必须保留完整目录及 `_internal`。`verify_release.py` 要求冻结 EXE 的 CUDA 运算、三个模型、网页及试听下载全部通过并生成文件校验清单，`publish_release.py` 预览后才可发布到新的 `dist/MusicVocalExtractor-GPU/`；任何旧版本都不会自动删除或覆盖。候选的本地 `runtime-config.json` 共享项目已有模型和结果目录，不复制权重，原 `-IncludeCachedModels` 已停止支持。上一轮 CPU EXE 验证记录见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)，本轮状态以 [GPU_ACCELERATION.md](GPU_ACCELERATION.md) 为准。
 
 默认使用系统已有 FFmpeg/FFprobe，不需要另外安装 Python。若需要个人自用的 FFmpeg 捆绑构建，可执行 `.\build_exe.ps1 -FFmpegDir '包含ffmpeg.exe与ffprobe.exe的目录'`。也可把两个工具放在 EXE 旁的 `ffmpeg/` 文件夹；不会修改系统 PATH。许可说明见 [FFMPEG_NOTICE.md](FFMPEG_NOTICE.md)。
 

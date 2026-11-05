@@ -34,8 +34,8 @@ def main():
             sessions.append(session)
             return session
 
-        def prepared(separator, model, stage):
-            prepare(separator, model, stage)
+        def prepared(separator, model, stage, **kwargs):
+            prepare(separator, model, stage, **kwargs)
             if model == ROFORMER_MODEL:
                 network = separator.model_instance.model_run
 

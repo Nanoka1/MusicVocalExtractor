@@ -1,5 +1,6 @@
 """Persistent writable paths and local FFmpeg discovery for Python and onedir."""
 import os
+import json
 import shutil
 import sys
 import tempfile
@@ -9,8 +10,22 @@ PROJECT_DIR = Path(__file__).resolve().parent
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else PROJECT_DIR
 
 
+def bundle_settings():
+    config = APP_DIR / "runtime-config.json"
+    if not getattr(sys, "frozen", False) or not config.is_file():
+        return {}
+    try:
+        data = json.loads(config.read_text(encoding="utf-8-sig"))
+        return {key: (APP_DIR / data[key]).resolve() for key in ("data_dir", "model_dir") if key in data}
+    except (OSError, ValueError, TypeError) as error:
+        raise RuntimeError(f"无法读取运行目录配置：{config}；请检查路径。") from error
+
+
+BUNDLE_SETTINGS = bundle_settings()
+
+
 def data_dir():
-    override = os.environ.get("MVE_DATA_DIR")
+    override = os.environ.get("MVE_DATA_DIR") or BUNDLE_SETTINGS.get("data_dir")
     if override:
         return Path(override).expanduser().resolve()
     candidates = [APP_DIR]
@@ -28,7 +43,7 @@ def data_dir():
 
 
 DATA_DIR = data_dir()
-MODEL_DIR = Path(os.environ.get("AUDIO_SEPARATOR_MODEL_DIR", DATA_DIR / "models")).expanduser().resolve()
+MODEL_DIR = Path(os.environ.get("AUDIO_SEPARATOR_MODEL_DIR") or BUNDLE_SETTINGS.get("model_dir") or DATA_DIR / "models").expanduser().resolve()
 OUTPUT_DIR = DATA_DIR / "outputs"
 # Numba JIT caches must also stay writable and outside frozen package resources.
 os.environ.setdefault("NUMBA_CACHE_DIR", str(DATA_DIR / "cache" / "numba"))

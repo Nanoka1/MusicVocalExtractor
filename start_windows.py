@@ -28,7 +28,8 @@ def main():
             print("安装完成后，重新打开项目文件夹并双击 start.bat。")
             return 1
 
-    python = PROJECT_DIR / ".venv" / "Scripts" / "python.exe"
+    gpu_python = PROJECT_DIR / ".venv-gpu" / "Scripts" / "python.exe"
+    python = gpu_python if gpu_python.is_file() else PROJECT_DIR / ".venv" / "Scripts" / "python.exe"
     if not python.is_file():
         if (PROJECT_DIR / ".venv").exists():
             print("现有 .venv 不能用于 Windows。请先将其重命名备份，再重新启动。")
