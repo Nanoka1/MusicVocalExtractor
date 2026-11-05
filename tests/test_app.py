@@ -20,7 +20,9 @@ class InterfaceTests(unittest.TestCase):
             value = upload.preprocess(FileData(path=str(path), orig_name="原始 中文 & 歌曲.mp3"))
             self.assertEqual(str(value), str(path))
             self.assertEqual(value.original_name, "原始 中文 & 歌曲.mp3")
-        self.assertIsNotNone(create_app().get_config_file())
+        config = create_app().get_config_file()
+        from app import OUTPUT_DIR
+        self.assertTrue(any(c["props"].get("label") == "当前输出目录" and c["props"].get("value") == str(OUTPUT_DIR) for c in config["components"]))
 
     def test_no_file_clears_results(self):
         from app import extract_vocals

@@ -1,5 +1,7 @@
 # RTX 5060 GPU 加速与验收
 
+**当前指令：保留全部 GPU 代码、依赖与既有 CUDA 证据，暂停真实 GPU 验收，不更改任何显卡/驱动/电源配置。CUDA 可以在正常的混合显卡模式下工作，并不要求独显直连。** 本轮 CPU 正式版、统一输出路径与已授权历史构建处理见 [OUTPUT_PATHS.md](OUTPUT_PATHS.md)；下文 GPU 基准为先前记录，不代表当前硬件在线。
+
 本轮基线：2026-11-05，Windows 11、Python 3.12.10，RTX 5060 Laptop 8151 MiB，驱动 591.86（nvidia-smi 报告驱动支持 CUDA 13.1）。旧 `.venv` 是 torch 2.8.0+cpu / ONNX Runtime 1.31.1 CPU，保留不变。
 
 隔离 GPU 环境选用官方稳定发布的 **torch 2.8.0+cu128 / torchvision 0.23.0+cu128**，与原引擎 audio-separator 0.48.0 配套。CUDA 12.8 wheel 包含 `sm_120`；本机真实 2048×2048 CUDA 矩阵乘法通过，设备为 `cuda:0`，Compute Capability (12, 0)。驱动支持版本与 PyTorch runtime 版本不是同一概念。
@@ -45,7 +47,7 @@ RoFormer 分段按作者 8 秒推荐值设置 segment_size=801（441 hop），�
 
 ## 构建及共享缓存
 
-后续构建使用 `.venv-gpu`，默认必须先通过真实 CUDA 预检；`-Cpu` 才选择原 CPU 环境。不重装依赖，不清空 dist。使用固定 `dist/candidate-gpu/MusicVocalExtractor/` 和 `build/gpu/`，已有候选则停止而不叠加时间戳目录。
+当前构建默认使用 CPU，只有显式 `-Gpu` 才使用 `.venv-gpu` 并要求真实 CUDA 预检；不会为普通 CPU 构建探测异常 GPU。不重装依赖，不清空 dist。GPU 使用固定 `dist/candidate-gpu/MusicVocalExtractor/` 和 `build/gpu/`，已有候选则停止而不叠加时间戳目录。
 
 候选的本地 `runtime-config.json` 指向项目现有数据/模型目录，跨版本复用校验过的缓存，不复制或移动权重；不再使用 `-IncludeCachedModels`。分发到其他位置/电脑前应调整该本地路径配置，不能随意删除原缓存。现有旧 EXE 的目录与数据不受影响。
 
@@ -54,7 +56,7 @@ GPU 恢复后运行：
 ```powershell
 .\.venv-gpu\Scripts\python.exe verify_gpu.py
 .\.venv-gpu\Scripts\python.exe benchmark_gpu.py
-.\build_exe.ps1
+.\build_exe.ps1 -Gpu
 .\.venv-gpu\Scripts\python.exe verify_release.py --package dist/candidate-gpu/MusicVocalExtractor
 .\.venv-gpu\Scripts\python.exe publish_release.py
 # 上一条预览通过后才执行：
@@ -63,4 +65,4 @@ GPU 恢复后运行：
 
 冻结程序提供 `--gpu-check` 和 `--verify-gpu-models`，分别实测 CUDA 矩阵运算和三个模型的 GPU 证据。发布验证还启动真实 EXE 网页、使用 CUDA 平衡模式分离并检查下载/试听一致性，生成文件 SHA-256 清单。发布仅将通过验收且未被修改的候选移动到新的 `dist/MusicVocalExtractor-GPU/`，不覆盖旧正式目录；已有 GPU 正式版时停止，需先审查回退方案，不自动删除任何历史。
 
-**当前由于独显不可用，新的 GPU EXE 尚未构建/验收/发布，旧可用 EXE 均保留。** 按 P0→P1→P2→P3 顺序，历史构建清理尚未执行；删除始终需要下一次明确授权，不因本轮任务自动执行。
+**新的 GPU EXE 仍未验收，不宣称 GPU 性能测试完成。** 用户后续已调整优先级，明确授权在数据完整迁移、进程检查及保留可用 CPU 正式版的条件下清理三个指定旧构建；这项授权不扩展到其他构建或数据目录。当前处理记录见 [OUTPUT_PATHS.md](OUTPUT_PATHS.md)。

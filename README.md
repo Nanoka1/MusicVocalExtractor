@@ -1,6 +1,6 @@
 # MusicVocalExtractor
 
-RTX 5060 GPU 环境、三种性能模式和候选 EXE 的验证流程见 [GPU_ACCELERATION.md](GPU_ACCELERATION.md)。本轮已完成三个模型的真实 CUDA 证据；后续验证期间独显离线，新的性能模式与 GPU EXE 尚未完成 GPU 验收，旧可用版本全部保留。
+项目内 Python、start.bat 和新版 EXE 默认共用根目录 `outputs/`、`models/`，路径解析与历史迁移见 [OUTPUT_PATHS.md](OUTPUT_PATHS.md)。此前 GPU 优化与 CUDA 证据完整保留；本轮按用户要求只做 CPU 验证，不要求独显直连，也不改系统设置。GPU 状态见 [GPU_ACCELERATION.md](GPU_ACCELERATION.md)。
 
 一个在自己电脑上使用的 **AI 人声与伴奏分离工具**。
 
@@ -51,13 +51,14 @@ Python 版模型和输出位于项目 `models/`、`outputs/歌曲名/`。Gradio 
 在项目 PowerShell 执行：
 
 ```powershell
-# GPU 环境安装与预检见 GPU_ACCELERATION.md；构建不自动安装依赖
-.\.venv-gpu\Scripts\python.exe -m pip install pyinstaller==6.22.3
-.\build_exe.ps1
-# 明确构建 CPU 候选时：.\build_exe.ps1 -Cpu
+# 构建不自动安装依赖；当前电脑已有 PyInstaller
+.\build_exe.ps1 -Cpu
+# 以后 GPU 恢复并准备验收时，才显式使用 -Gpu
 ```
 
-新构建目标为固定的 `dist/candidate-gpu/MusicVocalExtractor/`（CPU 为 candidate-cpu）。候选存在时停止，不自动覆盖或生成更多时间戳目录。必须保留完整目录及 `_internal`。`verify_release.py` 要求冻结 EXE 的 CUDA 运算、三个模型、网页及试听下载全部通过并生成文件校验清单，`publish_release.py` 预览后才可发布到新的 `dist/MusicVocalExtractor-GPU/`；任何旧版本都不会自动删除或覆盖。候选的本地 `runtime-config.json` 共享项目已有模型和结果目录，不复制权重，原 `-IncludeCachedModels` 已停止支持。上一轮 CPU EXE 验证记录见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)，本轮状态以 [GPU_ACCELERATION.md](GPU_ACCELERATION.md) 为准。
+新构建使用固定的 `dist/candidate-cpu/MusicVocalExtractor/`（显式 `-Gpu` 时为 candidate-gpu）。候选存在时停止，不自动覆盖或生成更多时间戳目录。CPU 候选通过 `verify_release.py --cpu` 的三个模型、网页及试听下载验收后，使用 `publish_release.py --cpu --publish` 发布到 `dist/MusicVocalExtractor/`；旧正式版及全部数据先保留至固定 `.reference/formal-exe-rollback/`，已有回退时停止而不覆盖。GPU 候选仍需真实 CUDA 验收，当前暂停。必须保留完整程序目录及 `_internal`。
+
+通过项目根标识 `mve-project.json` 及源码锚点定位当前项目的 dist EXE，不依赖父目录层数或工作目录；独立分发版无法确认项目位置时使用用户数据目录。`MVE_DATA_DIR`、`AUDIO_SEPARATOR_MODEL_DIR` 及显式 `runtime-config.json` 路径覆盖继续有效。不复制权重，原 `-IncludeCachedModels` 已停止支持。历史清理预览使用 `audit_builds.py`；它本身不会删除任何目录。
 
 默认使用系统已有 FFmpeg/FFprobe，不需要另外安装 Python。若需要个人自用的 FFmpeg 捆绑构建，可执行 `.\build_exe.ps1 -FFmpegDir '包含ffmpeg.exe与ffprobe.exe的目录'`。也可把两个工具放在 EXE 旁的 `ffmpeg/` 文件夹；不会修改系统 PATH。许可说明见 [FFMPEG_NOTICE.md](FFMPEG_NOTICE.md)。
 

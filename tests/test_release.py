@@ -10,6 +10,16 @@ from verify_release import package_manifest
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_cpu_verification_cannot_masquerade_as_gpu(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            report = dict(passed=True, gpu=False, cpu=True, http_preview_download=True,
+                          models_shared=True, manifest=package_manifest(root))
+            (root / "release-validation.json").write_text(json.dumps(report))
+            with self.assertRaisesRegex(RuntimeError, "没有通过"):
+                validate_candidate(root)
+            self.assertTrue(validate_candidate(root, require_gpu=False)["cpu"])
+
     def test_verified_package_rejects_changed_files(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

@@ -1,11 +1,14 @@
 """Explicit device selection and evidence from the engine's actual runtime."""
 from pathlib import Path
+import os
 
 _dll_handles = []
 
 
 def select_device(requested="auto", cpu=False):
     import torch
+    if requested == "auto":
+        requested = os.environ.get("MVE_DEVICE", "auto")
     if requested not in {"auto", "cpu", "cuda"}:
         raise ValueError("推理设备只能为 auto、cpu 或 cuda。")
     if cpu:
