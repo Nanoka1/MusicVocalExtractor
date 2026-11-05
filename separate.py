@@ -10,6 +10,7 @@ from pathlib import Path
 
 from models import DEFAULT_MODEL, MODELS, ROFORMER_MODEL, check_model
 from runtime_paths import DATA_DIR, MODEL_DIR, OUTPUT_DIR, configure_ffmpeg
+from gpu_runtime import device_info, preload_onnx_cuda, select_device, validate_loaded_device
 
 MODEL_NAME = DEFAULT_MODEL
 SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
@@ -170,7 +171,7 @@ def export_stems(stems, result_dir, output_format, tools, title=None):
 
 
 def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFAULT_MODEL,
-                   output_format="MP3", progress_callback=None, original_name=None):
+                   output_format="MP3", progress_callback=None, original_name=None, device="auto"):
     stage = progress_callback or (lambda message: print(message, flush=True))
     arch = check_model(model_name)
     output_format = output_format.upper()
@@ -187,11 +188,11 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         from audio_separator.separator import Separator
     except ImportError as error:
         raise RuntimeError(f"AI 依赖未能导入：{error}。请检查项目虚拟环境。") from error
-    if not cpu and torch.cuda.is_available() and arch == "MDX":
-        if hasattr(ort, "preload_dlls"):
-            ort.preload_dlls()
-        if "CUDAExecutionProvider" not in ort.get_available_providers():
-            raise RuntimeError("ONNX Runtime 缺少 CUDA 支持，请按原 GPU 说明配置，或使用 --cpu。")
+    selected = select_device(device, cpu)
+    info = device_info(selected)
+    stage(f"推理设备：{info['name']}（{selected.upper()}）；PyTorch {info['torch']}")
+    if selected == "cuda" and arch == "MDX":
+        preload_onnx_cuda()
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     work_root = DATA_DIR / "cache" / "separation"
@@ -199,7 +200,7 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     work_dir = Path(tempfile.mkdtemp(prefix="work_", dir=work_root))
     try:
         return _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
-                              output_format, tools, stage, original_name, cpu, torch)
+                              output_format, tools, stage, original_name, selected == "cpu", torch)
     except (Exception, SystemExit) as error:
         raise RuntimeError(f"分离失败：{error}。恢复材料保留在：{work_dir}") from error
 
@@ -213,6 +214,7 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
         separator.torch_device = torch.device("cpu")
         separator.onnx_execution_provider = ["CPUExecutionProvider"]
     prepare_model(separator, model_name, stage)
+    validate_loaded_device(separator, check_model(model_name), "cpu" if cpu else "cuda")
     required = ("Vocals", "Instrumental")
     stage("正在进行人声分离（AI 推理及 WAV 写出；不提供整体百分比）")
     output_names = {name: name for name in required}
@@ -249,12 +251,14 @@ def main():
     parser = argparse.ArgumentParser(description="将音乐分离为人声和伴奏。")
     parser.add_argument("audio", help="输入音频路径：MP3 / WAV / FLAC / M4A")
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
-    parser.add_argument("--cpu", action="store_true", help="强制使用 CPU")
+    devices = parser.add_mutually_exclusive_group()
+    devices.add_argument("--cpu", action="store_true", help="强制使用 CPU")
+    devices.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--model", choices=list(MODELS), default=DEFAULT_MODEL)
     parser.add_argument("--format", choices=["MP3", "WAV"], default="MP3")
     args = parser.parse_args()
     try:
-        vocals, instrumental = separate_audio(args.audio, args.output_dir, args.cpu, args.model, args.format)
+        vocals, instrumental = separate_audio(args.audio, args.output_dir, args.cpu, args.model, args.format, device=args.device)
     except Exception as error:
         print(f"分离失败：{error}", file=sys.stderr)
         return 1
