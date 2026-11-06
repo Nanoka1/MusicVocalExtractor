@@ -40,3 +40,13 @@
 ```
 
 GPU 候选必须通过冻结程序自身的 CUDA 运算、三模型前向/ORT profiling、CPU 回退及三模式网页下载试听验收后，才更新统一正式目录 `dist/MusicVocalExtractor/`。当前正式 CPU 版完整保留至固定 `.reference/formal-before-gpu-rollback/`；已有更早回退不覆盖，歌曲与模型仍共用项目根 outputs/models。
+
+## GPU EXE 最终验收
+
+最终 GPU 候选已通过并发布到 `dist/MusicVocalExtractor/MusicVocalExtractor.exe`。冻结程序自身报告 torch **2.8.0+cu128**、CUDA runtime **12.8**、ORT GPU **1.22.0**，2048×2048 CUDA 矩阵计算通过；三个模型均再次通过实际 CUDA 前向/ORT 节点执行检查，输出双轨有效、非静音且有限。GPU 版 EXE 的显式 CPU 模式也完成真实 MDX 分离。
+
+真实冻结 Gradio 服务以相同 16 秒合成音频完成高质量、平衡、快速三模式，返回 MP3 320 kbps，试听与下载内容一致，界面显示根 outputs，实际保存位置包含根 outputs 路径。缓存复用原根 models，包中不含三款下载权重；仅保留引擎必需的小型 mixer 参数资源。候选程序逻辑体积约 5.37 GB，CUDA 运行库保留，未通过删除必要 DLL 缩小体积。
+
+发布前再次校验文件清单并检查进程，将原 CPU 正式版完整保留后才更新正式目录；没有清空 dist 或删除任何回退。源码完整 CPU 回归 36 项无跳过，另增 GPU 发布保留 CPU 回退的测试通过。OOM 降段/初始化失败的错误路径由自动化模拟验证，本轮正常 GPU 推理未触发 OOM，不声称进行过破坏性的显存填满测试。
+
+本地原始证据（不提交 Git）：`.tools/gpu-resume-models.log`、`.tools/gpu-resume-benchmark*.log`、`.tools/gpu-resume-cpu-tests.log`、`.tools/gpu-resume-build.log`、`.tools/gpu-resume-exe-validation.log`、`.tools/gpu-resume-publish.log`、`test_artifacts/gpu-benchmark/report.json` 及正式包中的 `release-validation.json`。这些短合成信号结果不替代完整歌曲音质试听或其他硬件的发行验收。

@@ -40,9 +40,10 @@ def main():
     env = dict(os.environ, MVE_DATA_DIR=str(validation / "data"), AUDIO_SEPARATOR_MODEL_DIR=str(MODEL_DIR),
                GRADIO_TEMP_DIR=str(validation / "gradio"), NUMBA_CACHE_DIR=str(validation / "numba"),
                OMP_NUM_THREADS="4", MKL_NUM_THREADS="4", MVE_NO_BROWSER="1")
+    # Acceptance must exercise the bundle's real default project paths as well.
+    env.pop("MVE_DATA_DIR", None)
+    env.pop("AUDIO_SEPARATOR_MODEL_DIR", None)
     if args.cpu:
-        env.pop("MVE_DATA_DIR", None)
-        env.pop("AUDIO_SEPARATOR_MODEL_DIR", None)
         env["MVE_DEVICE"] = "cpu"
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     with (validation / "cli.log").open("w", encoding="utf-8") as log:
@@ -77,6 +78,11 @@ def main():
             assert all(row["passed"] for row in proofs)
             assert next(row for row in proofs if row["model"] == ROFORMER_MODEL)["cuda_forward_calls"] > 0
             assert all(row["cuda_nodes"] > 0 for row in proofs if row["model"] != ROFORMER_MODEL)
+            # The same CUDA bundle must also remain usable with an explicit CPU request.
+            cpu_audio = validation / "test_artifacts/gpu-model-proof/GPU 中文 验证.wav"
+            subprocess.run([str(exe), str(cpu_audio), "--cpu", "--model", DEFAULT_MODEL,
+                            "--output-dir", str(validation / "cpu-fallback")], cwd=validation, env=env,
+                           stdout=log, stderr=subprocess.STDOUT, creationflags=flags, timeout=300, check=True)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -99,17 +105,17 @@ def main():
                 time.sleep(.5)
             client = Client(address, download_files=str(validation / "downloads"), verbose=False)
             if not args.cpu:
-                audio = validation / "test_artifacts/gpu-model-proof/GPU 中文 验证.wav"
+                benchmark_audio = root / "test_artifacts/gpu-benchmark/性能 中文 测试.wav"
+                audio = benchmark_audio if benchmark_audio.is_file() else validation / "test_artifacts/gpu-model-proof/GPU 中文 验证.wav"
             config = httpx.get(address + "/config").json()
-            if args.cpu:
-                assert any(c["props"].get("label") == "当前输出目录" and c["props"].get("value") == str(OUTPUT_DIR) for c in config["components"])
-            result = client.predict(handle_file(str(audio)), ROFORMER_MODEL, "MP3", "balanced", "cpu" if args.cpu else "cuda", api_name="/separate")
-            assert "分离完成" in result[2] and ("CPU" if args.cpu else "CUDA") in result[2]
-            if args.cpu:
+            assert any(c["props"].get("label") == "当前输出目录" and c["props"].get("value") == str(OUTPUT_DIR) for c in config["components"])
+            for mode in (["balanced"] if args.cpu else ["quality", "balanced", "fast"]):
+                result = client.predict(handle_file(str(audio)), ROFORMER_MODEL, "MP3", mode, "cpu" if args.cpu else "cuda", api_name="/separate")
+                assert "分离完成" in result[2] and ("CPU" if args.cpu else "CUDA") in result[2]
                 assert str(OUTPUT_DIR) in result[2]
-            for download, preview in zip(result[:2], result[3:]):
-                verify_output(Path(download), "MP3", configure_ffmpeg())
-                assert Path(download).read_bytes() == Path(preview).read_bytes()
+                for download, preview in zip(result[:2], result[3:]):
+                    verify_output(Path(download), "MP3", configure_ffmpeg())
+                    assert Path(download).read_bytes() == Path(preview).read_bytes()
         finally:
             if child.poll() is None:
                 child.terminate()

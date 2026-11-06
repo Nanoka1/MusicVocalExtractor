@@ -1,15 +1,35 @@
 import json
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import runtime_paths
 from publish_release import validate_candidate
+import publish_release
 from verify_release import package_manifest
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_gpu_publish_updates_formal_and_keeps_cpu_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            formal = root / "dist/MusicVocalExtractor"
+            candidate = root / "dist/candidate-gpu/MusicVocalExtractor"
+            formal.mkdir(parents=True); candidate.mkdir(parents=True)
+            (formal / "old.txt").write_text("verified CPU fallback")
+            (candidate / "new.txt").write_text("synthetic verified GPU candidate")
+            older = root / ".reference/formal-exe-rollback"
+            older.mkdir(parents=True)
+            (older / "keep.txt").write_text("keep older fallback")
+            with patch.object(publish_release, "__file__", str(root / "publish_release.py")), patch.object(sys, "argv", ["publish_release", "--publish"]), patch.object(publish_release, "validate_candidate") as validate, patch.object(publish_release, "assert_not_running"):
+                publish_release.main()
+            validate.assert_called_once_with(candidate.resolve(), require_gpu=True)
+            self.assertTrue((formal / "new.txt").is_file())
+            self.assertTrue((root / ".reference/formal-before-gpu-rollback/old.txt").is_file())
+            self.assertTrue((older / "keep.txt").is_file())
+
     def test_cpu_verification_cannot_masquerade_as_gpu(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)

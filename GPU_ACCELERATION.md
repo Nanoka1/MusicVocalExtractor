@@ -1,6 +1,6 @@
 # RTX 5060 GPU 加速与验收
 
-**当前指令：保留全部 GPU 代码、依赖与既有 CUDA 证据，暂停真实 GPU 验收，不更改任何显卡/驱动/电源配置。CUDA 可以在正常的混合显卡模式下工作，并不要求独显直连。** 本轮 CPU 正式版、统一输出路径与已授权历史构建处理见 [OUTPUT_PATHS.md](OUTPUT_PATHS.md)；下文 GPU 基准为先前记录，不代表当前硬件在线。
+**最新恢复验证见 [GPU_VALIDATION.md](GPU_VALIDATION.md)。** RTX 5060 已恢复，沿用原环境继续 CUDA 和 GPU EXE 验收，不更改显卡/驱动/电源配置。CUDA 可以在正常混合显卡模式下工作，并不要求独显直连。以下保留先前暂停阶段的历史记录；路径与数据保护见 [OUTPUT_PATHS.md](OUTPUT_PATHS.md)。
 
 本轮基线：2026-11-05，Windows 11、Python 3.12.10，RTX 5060 Laptop 8151 MiB，驱动 591.86（nvidia-smi 报告驱动支持 CUDA 13.1）。旧 `.venv` 是 torch 2.8.0+cpu / ONNX Runtime 1.31.1 CPU，保留不变。
 

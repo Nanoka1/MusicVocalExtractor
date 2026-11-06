@@ -1,6 +1,6 @@
 # MusicVocalExtractor
 
-项目内 Python、start.bat 和新版 EXE 默认共用根目录 `outputs/`、`models/`，路径解析与历史迁移见 [OUTPUT_PATHS.md](OUTPUT_PATHS.md)。此前 GPU 优化与 CUDA 证据完整保留；本轮按用户要求只做 CPU 验证，不要求独显直连，也不改系统设置。GPU 状态见 [GPU_ACCELERATION.md](GPU_ACCELERATION.md)。
+项目内 Python、start.bat 和新版 EXE 默认共用根目录 `outputs/`、`models/`，路径解析与历史迁移见 [OUTPUT_PATHS.md](OUTPUT_PATHS.md)。RTX 5060 恢复后的 CUDA、三模型、性能模式与 GPU EXE 验收见 [GPU_VALIDATION.md](GPU_VALIDATION.md)。CUDA 不要求独显直连，不需要修改驱动或系统设置。
 
 一个在自己电脑上使用的 **AI 人声与伴奏分离工具**。
 
@@ -38,7 +38,7 @@
 
 使用步骤：上传音乐 → 在「选择 AI 分离模型」选择模型 → 在「输出音频格式」选择 MP3（默认）或 WAV → 点击「开始分离」→ 试听及下载两条音轨。首次使用模型由 Audio Separator 官方机制下载并校验 SHA-256，之后复用缓存。
 
-保留 `UVR-MDX-NET-Voc_FT.onnx`（默认）、`UVR-MDX-NET-Inst_HQ_3.onnx`，新增 **MelBand RoFormer · Kim**（`vocals_mel_band_roformer.ckpt`）。新模型权重约 913 MB，首次自动下载，CPU 较慢；Windows CPU 加载与推理已验证，GPU 未实测。默认仍用 Voc FT，因为尚未完成真实歌曲音质 AB 验证。移除 Karaoke 2 和 htdemucs 选项及四轨合成专用逻辑，已有模型缓存不会删除。参数见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)，六个候选的实时 Star、质量与许可比较见 [MODEL_RESEARCH.md](MODEL_RESEARCH.md)，本轮实测范围见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)。
+保留 `UVR-MDX-NET-Voc_FT.onnx`（默认）、`UVR-MDX-NET-Inst_HQ_3.onnx`，新增 **MelBand RoFormer · Kim**（`vocals_mel_band_roformer.ckpt`）。新模型权重约 913 MB，首次自动下载，CPU 较慢；Windows CPU 与 RTX 5060 CUDA 加载/推理已验证。默认仍用 Voc FT，因为尚未完成真实歌曲音质 AB 验证。移除 Karaoke 2 和 htdemucs 选项及四轨合成专用逻辑，已有模型缓存不会删除。参数见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)，六个候选的实时 Star、质量与许可比较见 [MODEL_RESEARCH.md](MODEL_RESEARCH.md)，本轮实测范围见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)。
 
 MP3 通过 FFmpeg `libmp3lame -b:a 320k` 真正编码，检查编码、比特率、采样率和声道，并完整解码两轨。只有两轨均成功才发布，随后删除本任务临时工作目录；WAV 模式只发布两条 PCM WAV。试听及下载使用同一结果文件。失败时不显示成功，恢复 WAV 和已编码音轨保留在错误消息指出的 `cache/separation/work_*/`，不会清理历史输出。
 
@@ -52,11 +52,11 @@ Python 版模型和输出位于项目 `models/`、`outputs/歌曲名/`。Gradio 
 
 ```powershell
 # 构建不自动安装依赖；当前电脑已有 PyInstaller
-.\build_exe.ps1 -Cpu
-# 以后 GPU 恢复并准备验收时，才显式使用 -Gpu
+.\build_exe.ps1 -Gpu
+# 需要构建 CPU 候选时显式使用 -Cpu；环境不重装
 ```
 
-新构建使用固定的 `dist/candidate-cpu/MusicVocalExtractor/`（显式 `-Gpu` 时为 candidate-gpu）。候选存在时停止，不自动覆盖或生成更多时间戳目录。CPU 候选通过 `verify_release.py --cpu` 的三个模型、网页及试听下载验收后，使用 `publish_release.py --cpu --publish` 发布到 `dist/MusicVocalExtractor/`；旧正式版及全部数据先保留至固定 `.reference/formal-exe-rollback/`，已有回退时停止而不覆盖。GPU 候选仍需真实 CUDA 验收，当前暂停。必须保留完整程序目录及 `_internal`。
+新构建使用固定的 `dist/candidate-cpu/MusicVocalExtractor/`（显式 `-Gpu` 时为 candidate-gpu）。候选存在时停止，不自动覆盖或生成更多时间戳目录。CPU 候选通过 `verify_release.py --cpu` 的三个模型、网页及试听下载验收后，使用 `publish_release.py --cpu --publish` 发布到 `dist/MusicVocalExtractor/`；旧正式版及全部数据先保留至固定 `.reference/formal-exe-rollback/`，已有回退时停止而不覆盖。GPU 候选通过 verify_release.py 后以 publish_release.py --publish 更新同一正式目录，原 CPU 正式版完整保留至 .reference/formal-before-gpu-rollback/。必须保留完整程序目录及 `_internal`。
 
 通过项目根标识 `mve-project.json` 及源码锚点定位当前项目的 dist EXE，不依赖父目录层数或工作目录；独立分发版无法确认项目位置时使用用户数据目录。`MVE_DATA_DIR`、`AUDIO_SEPARATOR_MODEL_DIR` 及显式 `runtime-config.json` 路径覆盖继续有效。不复制权重，原 `-IncludeCachedModels` 已停止支持。历史清理预览使用 `audit_builds.py`；它本身不会删除任何目录。
 
@@ -71,7 +71,7 @@ Python 版模型和输出位于项目 `models/`、`outputs/歌曲名/`。Gradio 
 .\.venv\Scripts\python.exe verify_web.py --url http://127.0.0.1:7860
 ```
 
-真实模型检查使用生成的短音频，不访问个人歌曲；其通过只能证明功能与编码流程正常，歌曲分离质量仍需试听。当前环境为 CPU 版，GPU 推理没有验证。下方原有安装和 GPU 配置说明继续保留。
+真实模型检查使用生成的短音频，不访问个人歌曲；其通过只能证明功能与编码流程正常，歌曲分离质量仍需试听。CPU 与 GPU 隔离环境均保留，最新 GPU 实测见 GPU_VALIDATION.md。下方原有安装和 GPU 配置说明继续保留。
 
 </details>
 
@@ -267,7 +267,7 @@ CC=gcc CXX=g++ .venv/bin/python -m pip install -r requirements.txt
 RUN_MODEL_TESTS=1 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-当前 Windows 11 CPU 验证与 EXE 状态见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)；NVIDIA GPU 尚未验证。批量处理不在本次范围内。
+当前 Windows 11 CPU/GPU 与 EXE 状态见 [GPU_VALIDATION.md](GPU_VALIDATION.md)，早期记录见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)。批量处理不在本次范围内。
 
 Linux 上 Audio Separator 的 `diffq` 依赖需要编译器；以上命令使用系统已有的 GCC/G++，并要求安装 Python 开发头文件。Windows 的相应依赖为 `diffq-fixed`，Python 3.12 x64 有预编译包。
 

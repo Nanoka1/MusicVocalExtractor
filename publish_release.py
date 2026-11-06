@@ -36,14 +36,12 @@ def main():
     root = Path(__file__).resolve().parent
     dist = (root / "dist").resolve()
     candidate = (dist / ("candidate-cpu" if args.cpu else "candidate-gpu") / "MusicVocalExtractor").resolve(strict=True)
-    target = (dist / ("MusicVocalExtractor" if args.cpu else "MusicVocalExtractor-GPU")).resolve()
+    target = (dist / "MusicVocalExtractor").resolve()
     if not candidate.is_relative_to(dist) or not target.is_relative_to(dist):
         raise RuntimeError("发布路径超出项目 dist。")
     validate_candidate(candidate, require_gpu=not args.cpu)
-    if target.exists() and not args.cpu:
-        raise RuntimeError("GPU 正式版已经存在，保留当前版本和候选。请先审查回退及数据保留方案；不自动覆盖或删除。")
-    backup = (root / ".reference" / "formal-exe-rollback").resolve()
-    if args.cpu and target.exists() and backup.exists():
+    backup = (root / ".reference" / ("formal-exe-rollback" if args.cpu else "formal-before-gpu-rollback")).resolve()
+    if target.exists() and backup.exists():
         raise RuntimeError("固定回退目录已存在，保留正式版和候选；请先审查回退保留方案。")
     print(f"已验证候选：{candidate}\n正式目录：{target}\n旧正式版及数据完整保留到：{backup}")
     if args.publish:

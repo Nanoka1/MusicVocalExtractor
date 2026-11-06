@@ -1,5 +1,7 @@
 # 统一输出与本地构建管理
 
+最新 GPU 正式版已更新到同一 `dist/MusicVocalExtractor/`，实际 GPU/CPU 回退验收见 [GPU_VALIDATION.md](GPU_VALIDATION.md)。下文保留此前 CPU 路径维护与历史清理记录；统一根 outputs/models 的规则不变。
+
 源码模式原本以模块目录为数据根目录，旧冻结模式却优先以 EXE 所在目录为 DATA_DIR，导致各版本分别写入 dist 下的 outputs。这是路径不一致的原因，与音频模型和 GPU 模式无关。
 
 现在源码使用真实模块目录；当前项目 dist 中的 EXE 沿实际可执行文件路径查找 `mve-project.json`，同时核对应用标识、源码锚点及 dist 归属，找到项目后共用根目录 `outputs/` 和 `models/`。不依赖 CWD、固定父目录层数或 PyInstaller `_MEIPASS`。显式 `MVE_DATA_DIR` / `AUDIO_SEPARATOR_MODEL_DIR` 优先，已有 `runtime-config.json` 自定义路径继续有效。
