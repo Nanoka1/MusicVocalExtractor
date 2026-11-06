@@ -8,6 +8,8 @@ def main():
     import torch
     import onnxruntime as ort
     import separate
+    import numpy as np
+    import soundfile as sf
     from models import MODELS, ROFORMER_MODEL
     from gpu_runtime import onnx_session
     from runtime_paths import configure_ffmpeg
@@ -55,6 +57,14 @@ def main():
             torch.cuda.synchronize()
             proof["peak_bytes"] = torch.cuda.max_memory_allocated()
             proof["outputs"] = list(map(str, outputs))
+            assert set(outputs[0].parent.iterdir()) == set(outputs)
+            peaks = []
+            for path in outputs:
+                data, rate = sf.read(path)
+                assert rate == 44100 and data.ndim == 2 and data.shape[1] == 2
+                assert np.isfinite(data).all() and np.max(np.abs(data)) > 0
+                peaks.append(float(np.max(np.abs(data))))
+            proof["output_peaks"] = peaks
             if name == ROFORMER_MODEL:
                 assert proof["cuda_forward_calls"] > 0 and proof["peak_bytes"] > 0
             else:

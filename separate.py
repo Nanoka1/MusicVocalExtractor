@@ -126,6 +126,9 @@ def prepare_model(separator, model, stage, metrics=None):
             load_start = time.perf_counter()
             try:
                 separator.load_model(model_filename=model)
+                if str(getattr(separator, "torch_device", "cpu")).startswith("cuda"):
+                    import torch
+                    torch.cuda.synchronize()
             except SystemExit as error:
                 # MDXC can sys.exit(1) after a failed load; keep the UI worker alive.
                 raise RuntimeError(f"模型加载失败：{model}。请检查启动窗口日志；缓存已保留。") from error

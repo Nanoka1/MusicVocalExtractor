@@ -1,6 +1,7 @@
 """Same-input CPU/CUDA benchmark; synthetic audio is not an audio quality test."""
 import argparse
 import gc
+import hashlib
 import json
 import subprocess
 import threading
@@ -17,6 +18,7 @@ def main():
     from models import ROFORMER_MODEL
     parser = argparse.ArgumentParser()
     parser.add_argument("--audio", type=Path)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     root = Path("test_artifacts/gpu-benchmark").resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -36,8 +38,19 @@ def main():
              ("gpu_native_fp16_evaluation", "cuda", "fast", "native_fp16")]
     base_options = separate.inference_options
     records = []
+    with audio.open("rb") as stream:
+        input_hash = hashlib.file_digest(stream, "sha256").hexdigest()
     baseline_audio = None
+    if args.resume:
+        records = json.loads((root / "report.json").read_text(encoding="utf-8"))
+        if not all(r.get("input_sha256") == input_hash and r.get("output_format") == "MP3" and r.get("passed") for r in records):
+            raise RuntimeError("输入或编码口径不一致，不能恢复旧测速。")
+        reference = next((r for r in records if r["case"] == "gpu_before_fp32"), None)
+        if reference:
+            baseline_audio = [sf.read(path)[0] for path in reference["outputs"]]
     for label, device, mode, precision in cases:
+        if any(r["case"] == label for r in records):
+            continue
         gc.collect()
         torch.cuda.empty_cache()
         samples = []
@@ -64,13 +77,15 @@ def main():
         thread = threading.Thread(target=monitor, daemon=True)
         if device == "cuda":
             thread.start()
-        stats = {"case": label, "precision": precision, "cpu_threads": 4}
+        stats = {"case": label, "precision": precision, "cpu_threads": 4,
+                 "input_sha256": input_hash, "output_format": "MP3", "duration_seconds": sf.info(audio).duration}
         try:
             with patch.object(separate, "inference_options", options):
                 paths = separate.separate_audio(audio, root / "results", model_name=ROFORMER_MODEL,
-                                                device=device, performance_mode=mode, output_format="WAV",
+                                                device=device, performance_mode=mode, output_format="MP3",
                                                 metrics_callback=stats.update)
             arrays = [sf.read(path)[0] for path in paths]
+            stats["outputs"] = list(map(str, paths))
             assert all(np.isfinite(x).all() and np.max(np.abs(x)) > 0 for x in arrays)
             assert set(paths[0].parent.iterdir()) == set(paths)
             if label == "gpu_before_fp32":
@@ -88,11 +103,11 @@ def main():
             if device == "cuda":
                 thread.join(timeout=6)
         stats["nvidia_gpu_utilization_peak_percent"] = max((x[0] for x in samples), default=None)
-        stats["nvidia_process_device_memory_peak_mib"] = max((x[1] for x in samples), default=None)
+        stats["nvidia_device_memory_peak_mib"] = max((x[1] for x in samples), default=None)
         records.append(stats)
         (root / "report.json").write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(stats, ensure_ascii=False), flush=True)
-    cpu_seconds = records[0]["inference_seconds"]
+    cpu_seconds = next(row["inference_seconds"] for row in records if row["case"] == "cpu_fp32")
     for row in records:
         if row.get("passed"):
             row["inference_speedup_vs_cpu"] = cpu_seconds / row["inference_seconds"]
