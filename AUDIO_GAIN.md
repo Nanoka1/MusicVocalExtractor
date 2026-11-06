@@ -25,3 +25,13 @@
 最终安全复核额外加入编码前的浮点过冲检查，增益专项 **6 项全部通过**。包含注入大于满幅的滤镜结果，验证整数编码不会执行、原始音轨保留；另按样本比较低电平增益波形，验证延迟补偿后的两轨对齐。新增故障注入测试首轮误拦正常 ffprobe，修正为只注入滤镜结果后通过。
 
 双击使用的 EXE 需要以更新源码重新打包；`verify_release.py` 的验收包括两个滑块、三模式中的 0/6/12 dB 组合、真实 CUDA 三模型、CPU 回退的正增益 PCM、MP3 下载/试听及根输出目录。发布脚本支持 `--backup-name formal-before-audio-gain`，目录名限制为安全单段名称；仅移动至新的 `.reference` 回退目录，已有目录时停止，从不覆盖或删除旧回退。
+
+## 最终 GPU EXE 交付
+
+2026-11-06 最终 EXE 使用干净源码 `2defbe82a5eb33f944728a0bbdbd1cf413f7fb03`，嵌入模块检查确认包含编码前过冲保护。沿用原 `.venv-gpu`，PyTorch 2.8.0+cu128 / ORT GPU 1.22.0，没有安装或重建环境，也没有重复下载大型权重。
+
+冻结程序的 RTX 5060 矩阵运算、MelBand RoFormer 实际 CUDA 前向、两个 MDX 模型实际 CUDA 节点，以及 CPU 回退的人声 +6/伴奏 +12 dB PCM 导出全部通过。真实网页以 16 秒合成音频验证高质量 0/0、平衡 6/12、快速 12/6 dB：双轨 MP3 320 kbps 可解码、峰值低于满幅，下载和试听字节一致；每个最终歌曲目录恰好两条 MP3，没有 WAV。
+
+验收后正式更新 `dist/MusicVocalExtractor/MusicVocalExtractor.exe`，原 GPU 正式版完整保留在 `.reference/formal-before-audio-gain/`，更早 CPU 回退不变。正式 EXE 从其他工作目录启动仍指向根 `outputs/` 与 `models/`；升级前记录的 **97 个现有音频/模型文件**逐项 SHA-256 一致，没有覆盖或删除。首轮候选同样保留，未冒充包含最终额外保护的版本发布。
+
+本地证据仅保留在忽略目录，不提交二进制、权重、音频或系统诊断：`.tools/gain-full-cpu-tests.log`、`.tools/gain-final-guard-tests.log`、`.tools/gain-release-tests.log`、`.tools/gain-gpu-final-build.log`、`.tools/gain-gpu-final-validation.log`、`.tools/gain-delivery.log`、`test_artifacts/gain-update/delivery-report.json` 以及正式包内 `release-validation.json`。本轮未做完整歌曲的主观 AB 听感验收。
