@@ -82,6 +82,10 @@ class GainTests(unittest.TestCase):
                                 self.assertAlmostEqual(measured, 10 ** (gain_db / 20), delta=.005)
                                 self.assertEqual(rate, 44100)
                                 self.assertEqual(data.shape, before.shape)
+                                if fmt == "WAV":
+                                    np.testing.assert_allclose(data[2000:-2000],
+                                                               before[2000:-2000] * 10 ** (gain_db / 20),
+                                                               atol=2e-6, rtol=0)
                                 self.assertLess(audio_peak(outputs[index])["peak"], 1)
                                 self.assertLess(report[label]["peak_shortfall_db"], .05)
                         self.assertEqual(len(list(case.glob("*." + fmt.lower()))), 2)
@@ -127,6 +131,28 @@ class GainTests(unittest.TestCase):
             sf.write(hot, np.array([0, 1.01]), 44100, subtype="FLOAT")
             with self.assertRaisesRegex(RuntimeError, "满幅"):
                 finish_gain_report({"factor": 1, "input_peak": 1}, hot)
+
+    def test_resampler_overshoot_is_rejected_before_pcm_clipping(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stems = self.make_stems(root)
+
+            def overshooting_filter(command):
+                # Inject a resampler/filter result above full scale. An integer
+                # encoder would clip it silently, so it must never be called.
+                self.assertNotIn("pcm_s24le", command)
+                if "-af" not in command:
+                    return run_tool(command)
+                data, rate = sf.read(stems["Vocals"])
+                data[100] = 1.1
+                sf.write(command[-1], data, rate, subtype="FLOAT")
+
+            with patch("separate.run_tool", side_effect=overshooting_filter):
+                with self.assertRaisesRegex(RuntimeError, "整数 PCM 削波"):
+                    export_stems(stems, root, "WAV", self.tools, vocal_gain_db=12)
+            self.assertFalse((root / "Vocals.wav").exists())
+            self.assertTrue(stems["Vocals"].is_file())
+            self.assertTrue((stems["Vocals"].parent / "Vocals_gain.wav").is_file())
 
     def test_gain_failure_preserves_originals_and_success_cleans_work(self):
         import torch

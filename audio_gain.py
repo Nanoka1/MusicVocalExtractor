@@ -49,6 +49,8 @@ def render_stem_gain(source, target, gain_db, tools, run_tool, ceiling_db=-1.0):
     run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(source),
               "-map", "0:a:0", "-af", filters, "-c:a", "pcm_f32le", str(target)])
     after = audio_peak(target)
+    if after["peak"] >= 1:
+        raise RuntimeError("限幅后浮点峰值仍达到满幅，已停止编码，避免整数 PCM 削波；恢复材料已保留。")
     if any(before[key] != after[key] for key in ("frames", "rate", "channels")):
         raise RuntimeError("增益处理改变了长度、采样率或声道；已停止导出。")
     return dict(requested_db=gain_db, factor=factor, input_peak=before["peak"], ceiling_db=ceiling_db)
