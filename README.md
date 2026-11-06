@@ -38,6 +38,16 @@
 
 使用步骤：上传音乐 → 在「选择 AI 分离模型」选择模型 → 在「输出音频格式」选择 MP3（默认）或 WAV → 点击「开始分离」→ 试听及下载两条音轨。首次使用模型由 Audio Separator 官方机制下载并校验 SHA-256，之后复用缓存。
 
+人声与伴奏各有独立的 **0～+12 dB** 增益滑块，默认均为 **0 dB**，步长 0.1 dB，旁边实时显示设置值。增益只在分离完成后应用于对应音轨，试听和下载使用同一导出文件。处理方式、峰值保护及测试范围见 [AUDIO_GAIN.md](AUDIO_GAIN.md)。
+
+CLI 示例（两个参数均可省略，默认 0 dB）：
+
+```powershell
+.\.venv-gpu\Scripts\python.exe separate.py "音乐.mp3" --vocal-gain-db 6 --instrumental-gain-db 3
+```
+
+Python API 支持 `separate_audio(path, vocal_gain_db=6, instrumental_gain_db=3)`；Gradio `/separate` API 使用同名参数。修改增益后需重新开始分离，当前成功任务会清理原始中间 WAV，因此没有追加永久缓存用于分离后重新调音。
+
 保留 `UVR-MDX-NET-Voc_FT.onnx`（默认）、`UVR-MDX-NET-Inst_HQ_3.onnx`，新增 **MelBand RoFormer · Kim**（`vocals_mel_band_roformer.ckpt`）。新模型权重约 913 MB，首次自动下载，CPU 较慢；Windows CPU 与 RTX 5060 CUDA 加载/推理已验证。默认仍用 Voc FT，因为尚未完成真实歌曲音质 AB 验证。移除 Karaoke 2 和 htdemucs 选项及四轨合成专用逻辑，已有模型缓存不会删除。参数见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)，六个候选的实时 Star、质量与许可比较见 [MODEL_RESEARCH.md](MODEL_RESEARCH.md)，本轮实测范围见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)。
 
 MP3 通过 FFmpeg `libmp3lame -b:a 320k` 真正编码，检查编码、比特率、采样率和声道，并完整解码两轨。只有两轨均成功才发布，随后删除本任务临时工作目录；WAV 模式只发布两条 PCM WAV。试听及下载使用同一结果文件。失败时不显示成功，恢复 WAV 和已编码音轨保留在错误消息指出的 `cache/separation/work_*/`，不会清理历史输出。

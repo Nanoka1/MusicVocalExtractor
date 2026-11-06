@@ -27,6 +27,7 @@ def main():
     from models import DEFAULT_MODEL, ROFORMER_MODEL, MODELS
     from runtime_paths import MODEL_DIR, OUTPUT_DIR, configure_ffmpeg
     from separate import verify_output, run_tool
+    from audio_gain import audio_peak
     parser = argparse.ArgumentParser()
     parser.add_argument("--package", type=Path, required=True)
     parser.add_argument("--cpu", action="store_true", help="只验收 CPU；不进行任何 CUDA 探测或运算")
@@ -81,8 +82,14 @@ def main():
             # The same CUDA bundle must also remain usable with an explicit CPU request.
             cpu_audio = validation / "test_artifacts/gpu-model-proof/GPU 中文 验证.wav"
             subprocess.run([str(exe), str(cpu_audio), "--cpu", "--model", DEFAULT_MODEL,
+                            "--format", "WAV", "--vocal-gain-db", "6", "--instrumental-gain-db", "12",
                             "--output-dir", str(validation / "cpu-fallback")], cwd=validation, env=env,
                            stdout=log, stderr=subprocess.STDOUT, creationflags=flags, timeout=300, check=True)
+            fallback_files = list((validation / "cpu-fallback").rglob("*.wav"))
+            assert len(fallback_files) == 2
+            for path in fallback_files:
+                verify_output(path, "WAV", configure_ffmpeg())
+                assert audio_peak(path)["peak"] < 1
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -109,13 +116,23 @@ def main():
                 audio = benchmark_audio if benchmark_audio.is_file() else validation / "test_artifacts/gpu-model-proof/GPU 中文 验证.wav"
             config = httpx.get(address + "/config").json()
             assert any(c["props"].get("label") == "当前输出目录" and c["props"].get("value") == str(OUTPUT_DIR) for c in config["components"])
+            for label in ("人声增益（dB）", "伴奏增益（dB）"):
+                slider = next(c["props"] for c in config["components"] if c["props"].get("label") == label)
+                assert (slider["minimum"], slider["maximum"], slider["value"]) == (0, 12, 0)
+            gain_proofs = []
             for mode in (["balanced"] if args.cpu else ["quality", "balanced", "fast"]):
-                result = client.predict(handle_file(str(audio)), ROFORMER_MODEL, "MP3", mode, "cpu" if args.cpu else "cuda", api_name="/separate")
+                vocal_db, inst_db = {"quality": (0, 0), "balanced": (6, 12), "fast": (12, 6)}[mode]
+                result = client.predict(handle_file(str(audio)), ROFORMER_MODEL, "MP3", mode, "cpu" if args.cpu else "cuda",
+                                        vocal_db, inst_db, api_name="/separate")
                 assert "分离完成" in result[2] and ("CPU" if args.cpu else "CUDA") in result[2]
                 assert str(OUTPUT_DIR) in result[2]
+                assert f"人声增益：+{vocal_db:.1f} dB" in result[2] and f"伴奏增益：+{inst_db:.1f} dB" in result[2]
                 for download, preview in zip(result[:2], result[3:]):
                     verify_output(Path(download), "MP3", configure_ffmpeg())
                     assert Path(download).read_bytes() == Path(preview).read_bytes()
+                    assert audio_peak(download)["peak"] < 1
+                gain_proofs.append(dict(mode=mode, vocal_gain_db=vocal_db, instrumental_gain_db=inst_db,
+                                        status=result[2], passed=True))
         finally:
             if child.poll() is None:
                 child.terminate()
@@ -129,6 +146,7 @@ def main():
     assert not any(p.stat().st_size > 1024 * 1024 for pattern in ("*.ckpt", "*.onnx", "*.pth", "*.th") for p in package.rglob(pattern))
     report = {"passed": True, "gpu": not args.cpu, "cpu": args.cpu, "preflight": preflight, "model_proofs": proofs,
               "http_preview_download": True, "models_shared": True,
+              "stem_gain_ui": gain_proofs,
               "validation_artifacts": str(validation), "manifest": package_manifest(package)}
     (package / "release-validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Frozen {'CPU' if args.cpu else 'GPU'} acceptance PASS: {package}")

@@ -1,6 +1,7 @@
 """Preview by default; publish a verified GPU candidate without deleting history."""
 import argparse
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -32,7 +33,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--cpu", action="store_true")
+    parser.add_argument("--backup-name", help="为本次升级指定 .reference 下的新回退目录名；不覆盖已有回退")
     args = parser.parse_args()
+    if args.backup_name and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", args.backup_name):
+        parser.error("回退目录名只能包含英文字母、数字、下划线和连字符，最多 64 字符。")
     root = Path(__file__).resolve().parent
     dist = (root / "dist").resolve()
     candidate = (dist / ("candidate-cpu" if args.cpu else "candidate-gpu") / "MusicVocalExtractor").resolve(strict=True)
@@ -40,7 +44,8 @@ def main():
     if not candidate.is_relative_to(dist) or not target.is_relative_to(dist):
         raise RuntimeError("发布路径超出项目 dist。")
     validate_candidate(candidate, require_gpu=not args.cpu)
-    backup = (root / ".reference" / ("formal-exe-rollback" if args.cpu else "formal-before-gpu-rollback")).resolve()
+    backup_name = args.backup_name or ("formal-exe-rollback" if args.cpu else "formal-before-gpu-rollback")
+    backup = (root / ".reference" / backup_name).resolve()
     if target.exists() and backup.exists():
         raise RuntimeError("固定回退目录已存在，保留正式版和候选；请先审查回退保留方案。")
     print(f"已验证候选：{candidate}\n正式目录：{target}\n旧正式版及数据完整保留到：{backup}")

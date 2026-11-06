@@ -13,6 +13,7 @@ from models import DEFAULT_MODEL, MODELS, ROFORMER_MODEL, check_model
 from runtime_paths import DATA_DIR, MODEL_DIR, OUTPUT_DIR, configure_ffmpeg
 from gpu_runtime import device_info, preload_onnx_cuda, select_device, validate_loaded_device
 from performance import inference_options, infer_with_retry
+from audio_gain import validate_gain, render_stem_gain, finish_gain_report, format_gain_report
 
 MODEL_NAME = DEFAULT_MODEL
 SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
@@ -155,18 +156,32 @@ def named_stems(returned, folder, required):
     return stems
 
 
-def export_stems(stems, result_dir, output_format, tools, title=None):
+def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain_db=0,
+                 instrumental_gain_db=0, gain_report=None):
     """Encode and fully decode both tracks before the caller can publish/clean."""
+    gains = {"Vocals": validate_gain(vocal_gain_db), "Instrumental": validate_gain(instrumental_gain_db)}
+    gain_report = gain_report if gain_report is not None else {}
     outputs = []
     for label in ("Vocals", "Instrumental"):
+        gain_db = gains[label]
+        report = {"requested_db": gain_db}
+        gain_report[label] = report
         source = stems[label]
         original = verify_output(source, "WAV", tools)
         target = result_dir / f"{title + '_' if title else ''}{label}.{output_format.lower()}"
         if target.exists():
             raise FileExistsError(f"结果已存在，拒绝覆盖：{target}")
+        if gain_db > 0:
+            # Recovery WAV stays untouched; the extra float WAV is temporary only.
+            processed = source.parent / (label + "_gain.wav")
+            report.update(render_stem_gain(source, processed, gain_db, tools, run_tool))
+            source = processed
         if output_format == "MP3":
             run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(source),
                       "-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", "320k", str(target)])
+        elif gain_db > 0:
+            run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(source),
+                      "-map", "0:a:0", "-c:a", "pcm_s24le", str(target)])
         else:
             with target.open("xb") as destination, source.open("rb") as origin:
                 shutil.copyfileobj(origin, destination)
@@ -174,14 +189,19 @@ def export_stems(stems, result_dir, output_format, tools, title=None):
         if (encoded["sample_rate"], encoded["channels"]) != (original["sample_rate"], original["channels"]):
             raise RuntimeError(f"导出采样率或声道与分离音轨不一致：{target}")
         run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-xerror", "-i", str(target), "-f", "null", "-"])
+        if gain_db > 0:
+            finish_gain_report(report, target)
         outputs.append(target)
     return tuple(outputs)
 
 
 def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFAULT_MODEL,
                    output_format="MP3", progress_callback=None, original_name=None, device="auto",
-                   performance_mode="balanced", metrics_callback=None):
+                   performance_mode="balanced", metrics_callback=None, vocal_gain_db=0,
+                   instrumental_gain_db=0):
     total_start = time.perf_counter()
+    vocal_gain_db = validate_gain(vocal_gain_db)
+    instrumental_gain_db = validate_gain(instrumental_gain_db)
     stage = progress_callback or (lambda message: print(message, flush=True))
     arch = check_model(model_name)
     output_format = output_format.upper()
@@ -216,7 +236,8 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     try:
         outputs = _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
                                  output_format, tools, stage, original_name, selected == "cpu", torch,
-                                 options=options, metrics=stats)
+                                 options=options, metrics=stats, vocal_gain_db=vocal_gain_db,
+                                 instrumental_gain_db=instrumental_gain_db)
         stats["total_seconds"] = time.perf_counter() - total_start
         if selected == "cuda":
             stats["peak_bytes"] = torch.cuda.max_memory_allocated()
@@ -228,7 +249,8 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
 
 
 def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
-                   output_format, tools, stage, original_name, cpu, torch, options=None, metrics=None):
+                   output_format, tools, stage, original_name, cpu, torch, options=None, metrics=None,
+                   vocal_gain_db=0, instrumental_gain_db=0):
     metrics = metrics if metrics is not None else {}
     prepare_start = time.perf_counter()
     separator = Separator(model_file_dir=str(MODEL_DIR), output_dir=str(work_dir),
@@ -262,7 +284,13 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
     staging = work_dir / "export"
     staging.mkdir()
     try:
-        encoded = export_stems(stems, staging, output_format, tools, result_dir.name)
+        gain_report = {}
+        encoded = export_stems(stems, staging, output_format, tools, result_dir.name,
+                               vocal_gain_db=vocal_gain_db, instrumental_gain_db=instrumental_gain_db,
+                               gain_report=gain_report)
+        metrics["stem_gains"] = gain_report
+        stage(format_gain_report(gain_report["Vocals"], "人声"))
+        stage(format_gain_report(gain_report["Instrumental"], "伴奏"))
         outputs = tuple(result_dir / path.name for path in encoded)
         for source, target in zip(encoded, outputs):
             with source.open("rb") as origin, target.open("xb") as destination:
@@ -289,12 +317,20 @@ def main():
     parser.add_argument("--model", choices=list(MODELS), default=DEFAULT_MODEL)
     parser.add_argument("--format", choices=["MP3", "WAV"], default="MP3")
     parser.add_argument("--performance", choices=["quality", "balanced", "fast"], default="balanced")
+    parser.add_argument("--vocal-gain-db", type=validate_gain, default=0,
+                        help="分离后人声增益，0～12 dB；正增益启用前瞻峰值保护")
+    parser.add_argument("--instrumental-gain-db", type=validate_gain, default=0,
+                        help="分离后伴奏增益，0～12 dB；与人声独立控制")
     args = parser.parse_args()
     try:
         from performance import format_metrics
         vocals, instrumental = separate_audio(args.audio, args.output_dir, args.cpu, args.model, args.format,
                                               device=args.device, performance_mode=args.performance,
-                                              metrics_callback=lambda stats: print(format_metrics(stats)))
+                                              vocal_gain_db=args.vocal_gain_db,
+                                              instrumental_gain_db=args.instrumental_gain_db,
+                                              metrics_callback=lambda stats: print(format_metrics(stats) + "\n" +
+                                                  format_gain_report(stats["stem_gains"]["Vocals"], "人声") + "\n" +
+                                                  format_gain_report(stats["stem_gains"]["Instrumental"], "伴奏")))
     except Exception as error:
         print(f"分离失败：{error}", file=sys.stderr)
         return 1
