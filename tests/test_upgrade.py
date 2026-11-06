@@ -30,7 +30,7 @@ class UpgradeTests(unittest.TestCase):
         class FakeSeparator:
             downloaded = False
             def list_supported_model_files(self):
-                return {"MDX": {"Default": {"filename": DEFAULT_MODEL, "download_files": [DEFAULT_MODEL]}}}
+                return {check_model(DEFAULT_MODEL): {"Default": {"filename": DEFAULT_MODEL, "download_files": [DEFAULT_MODEL]}}}
             def get_model_checksums(self):
                 return {DEFAULT_MODEL: "published checksum"}
             def verify_model_file_checksum(self, path):

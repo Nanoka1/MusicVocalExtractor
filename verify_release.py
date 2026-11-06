@@ -57,7 +57,7 @@ def main():
             run_tool([configure_ffmpeg()["ffmpeg"], "-v", "error", "-n", "-f", "lavfi", "-i", "sine=frequency=330:duration=1", "-ar", "44100", "-ac", "2", str(audio)])
             proofs = []
             OUTPUT_DIR.mkdir(exist_ok=True)
-            for name, fmt in ((DEFAULT_MODEL, "MP3"), ("UVR-MDX-NET-Inst_HQ_3.onnx", "WAV"), (ROFORMER_MODEL, "MP3")):
+            for name, fmt in ((model, fmt) for model in MODELS for fmt in ("MP3", "WAV")):
                 before = set(OUTPUT_DIR.iterdir())
                 subprocess.run([str(exe), str(audio), "--cpu", "--model", name, "--format", fmt, "--performance", "fast"],
                                cwd=validation, env=env, stdout=log, stderr=subprocess.STDOUT, creationflags=flags, timeout=300, check=True)
@@ -75,7 +75,8 @@ def main():
                                creationflags=flags, timeout=300, check=True)
             preflight = json.loads((validation / "test_artifacts/gpu-preflight.json").read_text(encoding="utf-8"))
             proofs = json.loads((validation / "test_artifacts/gpu-model-proof/report.json").read_text(encoding="utf-8"))
-            assert preflight["tensor_test"] and preflight["cuda_runtime"] and len(proofs) == 3
+            assert preflight["tensor_test"] and preflight["cuda_runtime"] and len(proofs) == len(MODELS)
+            assert {row["model"] for row in proofs} == set(MODELS)
             assert all(row["passed"] for row in proofs)
             assert next(row for row in proofs if row["model"] == ROFORMER_MODEL)["cuda_forward_calls"] > 0
             assert all(row["cuda_nodes"] > 0 for row in proofs if row["model"] != ROFORMER_MODEL)
@@ -119,6 +120,9 @@ def main():
             for label in ("人声增益（dB）", "伴奏增益（dB）"):
                 slider = next(c["props"] for c in config["components"] if c["props"].get("label") == label)
                 assert (slider["minimum"], slider["maximum"], slider["value"]) == (0, 12, 0)
+            dropdown = next(c['props'] for c in config['components'] if c['props'].get('label') == '选择 AI 分离模型')
+            assert dropdown['value'] == DEFAULT_MODEL
+            assert {choice[1] for choice in dropdown['choices']} == set(MODELS)
             gain_proofs = []
             for mode in (["balanced"] if args.cpu else ["quality", "balanced", "fast"]):
                 vocal_db, inst_db = {"quality": (0, 0), "balanced": (6, 12), "fast": (12, 6)}[mode]

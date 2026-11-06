@@ -183,7 +183,7 @@ class GainTests(unittest.TestCase):
                         raise RuntimeError("limiter failed")
                     return run_tool(command)
 
-                with patch("separate.prepare_model"), patch("separate.validate_loaded_device"), patch("separate.run_tool", side_effect=tool):
+                with patch("separate.prepare_model"), patch("separate.validate_loaded_device"), patch("performance.observe_forward", return_value=[]), patch("separate.run_tool", side_effect=tool):
                     args = (Engine, source, results, work, DEFAULT_MODEL, "MP3", self.tools, stages.append,
                             "中文 歌曲.wav", True, torch)
                     if fails:

@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from models import DEFAULT_MODEL, MODELS, ROFORMER_MODEL, check_model
+from models import DEFAULT_MODEL, MODELS, ROFORMER_MODEL, REMOVED_MODELS, check_model
 from runtime_paths import DATA_DIR, MODEL_DIR, OUTPUT_DIR, configure_ffmpeg
 from gpu_runtime import device_info, preload_onnx_cuda, select_device, validate_loaded_device
 from performance import inference_options, infer_with_retry
@@ -94,12 +94,12 @@ def reserve_result_dir(output_dir, title):
 
 def prepare_model(separator, model, stage, metrics=None):
     """Public APIs, official downloads and SHA-256; preserve existing corrupt files too."""
+    arch = check_model(model)  # Reject retired IDs before network/cache/engine access.
     from filelock import FileLock, Timeout
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     try:
         with FileLock(str(MODEL_DIR / ".download.lock"), timeout=1):
             supported = separator.list_supported_model_files()
-            arch = check_model(model)
             info = next((item for item in supported.get(arch, {}).values() if item["filename"] == model), None)
             if info is None:
                 raise RuntimeError(f"当前 Audio Separator 官方列表未包含 {model}，请检查版本及模型清单。")
@@ -203,6 +203,12 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     vocal_gain_db = validate_gain(vocal_gain_db)
     instrumental_gain_db = validate_gain(instrumental_gain_db)
     stage = progress_callback or (lambda message: print(message, flush=True))
+    requested_model = model_name
+    if model_name in REMOVED_MODELS:
+        if not (MODEL_DIR / DEFAULT_MODEL).is_file():
+            raise ValueError(f"旧模型 {model_name} 已停用，且本地默认模型不存在。未执行下载，请先检查模型缓存。")
+        stage(f"旧配置中的 {model_name} 已停用；改用本地默认模型 {DEFAULT_MODEL}，不会下载旧模型。")
+        model_name = DEFAULT_MODEL
     arch = check_model(model_name)
     output_format = output_format.upper()
     if output_format not in {"MP3", "WAV"}:
@@ -220,7 +226,7 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         raise RuntimeError(f"AI 依赖未能导入：{error}。请检查项目虚拟环境。") from error
     selected = select_device(device, cpu)
     info = device_info(selected)
-    stats = dict(info, mode=performance_mode, oom_retries=0)
+    stats = dict(info, mode=performance_mode, oom_retries=0, model=model_name, requested_model=requested_model)
     options = inference_options(model_name, performance_mode, selected, info.get("free_bytes"))
     stats["options"] = options
     if selected == "cuda":

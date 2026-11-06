@@ -65,7 +65,7 @@ def extract_vocals(audio_path, model_name=DEFAULT_MODEL, output_format="MP3", pe
             vocals, instrumental = map(str, paths)
             yield vocals, instrumental, (f"分离完成！\n歌曲：{paths[0].parent.name}\n"
                                         f"人声：{paths[0].name}\n伴奏：{paths[1].name}\n"
-                                        f"保存位置：{paths[0].parent}\n模型：{model_name}\n"
+                                        f"保存位置：{paths[0].parent}\n模型：{stats.get('model', model_name)}\n"
                                         f"{format_gain_report(stats.get('stem_gains', {}).get('Vocals', {}), '人声')}\n"
                                         f"{format_gain_report(stats.get('stem_gains', {}).get('Instrumental', {}), '伴奏')}\n"
                                         f"{format_metrics(stats)}"), vocals, instrumental
