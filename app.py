@@ -17,6 +17,7 @@ from gpu_runtime import hardware_status
 from performance import MODE_CHOICES, MODES, format_metrics
 from audio_gain import format_gain_report
 from mix_tracks import mix_manifest, saved_mixes
+from instrument_split import SCNET_MODEL
 from vocal_split import BVE_MODEL
 
 
@@ -41,12 +42,14 @@ def extract_vocals(audio_path, model_name=DEFAULT_MODEL, output_format="MP3", pe
 
 
 def separation_updates(audio_path, model_name, output_format, performance_mode, device,
-                       vocal_gain_db, instrumental_gain_db, progress, prepare_mix=False, split_backing=False):
+                       vocal_gain_db, instrumental_gain_db, progress, prepare_mix=False,
+                       split_backing=False, split_instruments=False):
     if not audio_path:
         yield None, "请先选择一个音乐文件。"
         return
     events = queue.Queue()
-    active_models = f"{model_name} → {BVE_MODEL}" if split_backing else model_name
+    base_model = SCNET_MODEL if split_instruments else model_name
+    active_models = f"{base_model} → {BVE_MODEL}" if split_backing else base_model
 
     def worker():
         try:
@@ -55,7 +58,7 @@ def separation_updates(audio_path, model_name, output_format, performance_mode, 
                                     original_name=getattr(audio_path, "original_name", None),
                                     performance_mode=performance_mode, device=device, vocal_gain_db=vocal_gain_db,
                                     instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix,
-                                    split_backing=split_backing,
+                                    split_backing=split_backing, split_instruments=split_instruments,
                                     metrics_callback=stats.update,
                                     progress_callback=lambda message: events.put(("stage", message)))
             events.put(("done", (result, stats)))
@@ -83,6 +86,8 @@ def separation_updates(audio_path, model_name, output_format, performance_mode, 
                       f"保存位置：{paths[0].parent}\n模型：{used_models}\n{reports}\n{format_metrics(stats)}")
             if split_backing:
                 status += f"\n和声推理设备：{stats['vocal_device'].upper()}，模型阶段 {stats['vocal_seconds']:.2f} 秒"
+            if split_instruments:
+                status += f"\nSCNet ONNX Runtime 推理设备：{stats['instrument_device'].upper()}"
             yield paths, status
             return
 
@@ -91,7 +96,8 @@ def extract_for_mixer(audio_path, model_name, output_format, performance_mode, d
                       vocal_gain_db, instrumental_gain_db, mode="two", progress=gr.Progress()):
     for paths, status in separation_updates(audio_path, model_name, output_format, performance_mode,
                                             device, vocal_gain_db, instrumental_gain_db, progress,
-                                            prepare_mix=True, split_backing=mode == "vocals"):
+                                            prepare_mix=True, split_backing=mode in {"vocals", "band"},
+                                            split_instruments=mode == "band"):
         if not paths:
             yield None, status, None, gr.skip()
             continue
@@ -117,9 +123,10 @@ def create_app():
         gr.Textbox(label="当前输出目录", value=str(OUTPUT_DIR), interactive=False)
         audio = UploadedAudio(label="选择音乐文件（MP3、WAV、FLAC、M4A）",
                         file_types=[".mp3", ".wav", ".flac", ".m4a"], type="filepath")
-        model = gr.Dropdown(label="选择 AI 分离模型", choices=MODEL_CHOICES, value=DEFAULT_MODEL)
-        mode = gr.Radio(label="分离模式", choices=[("人声与伴奏", "two"), ("主唱与和声", "vocals")], value="two",
-                        info=f"主唱与和声模式先分离人声，再由 {BVE_MODEL} 处理，伴奏保留为一轨。")
+        model = gr.Dropdown(label="选择两轨／三轨的基础模型", choices=MODEL_CHOICES, value=DEFAULT_MODEL)
+        mode = gr.Radio(label="分离模式", value="two",
+                        choices=[("人声与伴奏", "two"), ("主唱与和声", "vocals"), ("主唱、和声与乐器", "band")],
+                        info="五轨模式由 SCNet 提取人声、鼓、贝斯与其他乐器，再由 UVR-BVE-4B 拆分人声。")
         output_format = gr.Dropdown(label="输出音频格式", choices=[("MP3（320 kbps）", "MP3"), ("WAV（无损 PCM）", "WAV")], value="MP3")
         with gr.Row():
             with gr.Column():
@@ -132,15 +139,17 @@ def create_app():
                     queue=False, api_name=False)
         instrumental_gain.change(lambda value: f"**伴奏增益：+{value:.1f} dB**", inputs=instrumental_gain,
                                  outputs=instrumental_gain_label, queue=False, api_name=False)
-        gr.Markdown("导出增益在分离前设置，正增益启用峰值保护。主唱与和声沿用人声导出增益。下方混音器可独立调整各轨试听音量。")
+        gr.Markdown("导出增益在分离前设置，正增益启用峰值保护。主唱与和声沿用人声增益，各乐器沿用伴奏增益。下方混音器可独立调整试听音量。")
         performance = gr.Dropdown(label="AI 分离性能模式", choices=MODE_CHOICES, value="balanced")
         device = gr.Dropdown(label="推理设备", choices=[("自动检测", "auto"), ("CUDA GPU（不可用时报错）", "cuda"), ("CPU", "cpu")], value=os.environ.get("MVE_DEVICE", "auto"))
         hardware = gr.Textbox(label="GPU 加速状态", value=hardware_status(), interactive=False)
-        gr.Markdown("高质量优先使用 FP32 和更多重叠；平衡/快速在 CUDA 下使用混合精度，快速模式减少重叠，可能产生音质差异。显存不足最多降低分段重试一次。")
-        def show_hardware(model_name, mode, requested):
-            return f"{hardware_status()}\n模型：{model_name}\n性能模式：{MODES[mode]}\n请求设备：{requested}（本次实际设备见处理状态）"
-        for component in (model, performance, device):
-            component.change(show_hardware, inputs=[model, performance, device], outputs=hardware, api_name=False)
+        gr.Markdown("高质量使用更多重叠。RoFormer 的平衡／快速在 CUDA 下使用混合精度，显存不足时可降低分段重试一次。")
+        def show_hardware(model_name, performance_mode, requested, separation_mode):
+            base = SCNET_MODEL if separation_mode == "band" else model_name
+            active = f"{base} → {BVE_MODEL}" if separation_mode in {"vocals", "band"} else base
+            return f"{hardware_status()}\n模型：{active}\n性能模式：{MODES[performance_mode]}\n请求设备：{requested}（本次实际设备见处理状态）"
+        for component in (model, performance, device, mode):
+            component.change(show_hardware, inputs=[model, performance, device, mode], outputs=hardware, api_name=False)
         start = gr.Button("开始分离", variant="primary")
         status = gr.Textbox(label="处理状态", value="请选择音乐文件，然后点击“开始分离”。", interactive=False)
         downloads = gr.File(label="本次分离结果 · 点击下载", file_count="multiple", interactive=False)

@@ -85,7 +85,7 @@ function createTrack(track) {
   const row = document.createElement("div");
   row.className = "mve-track";
   const label = document.createElement("label");
-  const icons = { Vocals: "🎤", LeadVocals: "🎤", BackingVocals: "🎙", Instrumental: "♫" };
+  const icons = { Vocals: "🎤", LeadVocals: "🎤", BackingVocals: "🎙", Drums: "🥁", Bass: "🎸" };
   label.textContent = (icons[track.id] || "♫") + " " + track.label;
   const slider = document.createElement("input");
   slider.type = "range";

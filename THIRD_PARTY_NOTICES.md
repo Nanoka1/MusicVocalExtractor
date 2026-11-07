@@ -8,6 +8,7 @@
 | Kim MelBand RoFormer 权重 | 作者权重卡标注 MIT；https://huggingface.co/KimberleyJSN/melbandroformer 。通过 MIT 的 Audio Separator 推理，不复制作者 GitHub 仓库源码；原始权重与镜像 SHA-256 一致。详见 [MODEL_RESEARCH.md](MODEL_RESEARCH.md) |
 | Ultimate Vocal Remover (UVR) | MIT 代码；感谢 Anjok07、UVR 开发者以及 MDX-Net 作者 Kuielab、Woosung Choi；https://github.com/Anjok07/ultimatevocalremovergui |
 | UVR-BVE-4B v1 权重 | [UVR 团队模型的 MIT 使用及署名说明](https://github.com/Anjok07/ultimatevocalremovergui#license)。感谢 Anjok07、TRvlvr 与 UVR 团队。[官方权重发布](https://github.com/TRvlvr/model_repo/releases/tag/all_public_uvr_models) · [选型与校验](MULTITRACK_MODELS.md) |
+| SCNet 权重与 ONNX 转换 | Copyright (c) 2024 starrytong。感谢 Weinan Tong 等 SCNet 作者、Roman Solovyev 和 audiojs。作者确认原始权重及格式转换可按 MIT 使用和署名。[作者授权](https://github.com/starrytong/SCNet/issues/35) · [audiojs 转换及许可](https://huggingface.co/audiojs/scnet/tree/e71bcdb42bce1d62b7fae25ba90fcbcf90f73f46) |
 | Demucs | MIT 代码；Copyright Meta Platforms, Inc. and affiliates；https://github.com/facebookresearch/demucs |
 | PyTorch / torchvision | BSD 类许可证；https://github.com/pytorch/pytorch 、https://github.com/pytorch/vision |
 | librosa | ISC；https://github.com/librosa/librosa |
