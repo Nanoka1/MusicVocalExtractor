@@ -17,7 +17,7 @@ if os.environ.get("MVE_BUILD_FLAVOR") == "GPU":
     else:
         raise RuntimeError("Do not mix CPU and GPU ONNX Runtime")
 # Gradio's component metaclass reads UploadedAudio's defining source at import.
-datas = [(str(root / "app.py"), ".")]
+datas = [(str(root / name), ".") for name in ("app.py", "mixer.html", "mixer.css", "mixer.js")]
 for package in ("audio_separator", "gradio", "gradio_client", "huggingface_hub", "librosa", "numba", "safehttpx", "groovy", "hf_gradio"):
     # librosa and numba inspect source files for lazy loading/JIT cache locations.
     datas += collect_data_files(package, include_py_files=package in ("gradio", "gradio_client", "librosa", "numba"))

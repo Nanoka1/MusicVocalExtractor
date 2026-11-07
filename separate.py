@@ -198,7 +198,7 @@ def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain
 def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFAULT_MODEL,
                    output_format="MP3", progress_callback=None, original_name=None, device="auto",
                    performance_mode="balanced", metrics_callback=None, vocal_gain_db=0,
-                   instrumental_gain_db=0):
+                   instrumental_gain_db=0, prepare_mix=False):
     total_start = time.perf_counter()
     vocal_gain_db = validate_gain(vocal_gain_db)
     instrumental_gain_db = validate_gain(instrumental_gain_db)
@@ -243,7 +243,7 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         outputs = _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
                                  output_format, tools, stage, original_name, selected == "cpu", torch,
                                  options=options, metrics=stats, vocal_gain_db=vocal_gain_db,
-                                 instrumental_gain_db=instrumental_gain_db)
+                                 instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix)
         stats["total_seconds"] = time.perf_counter() - total_start
         if selected == "cuda":
             stats["peak_bytes"] = torch.cuda.max_memory_allocated()
@@ -256,7 +256,7 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
 
 def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
                    output_format, tools, stage, original_name, cpu, torch, options=None, metrics=None,
-                   vocal_gain_db=0, instrumental_gain_db=0):
+                   vocal_gain_db=0, instrumental_gain_db=0, prepare_mix=False):
     metrics = metrics if metrics is not None else {}
     prepare_start = time.perf_counter()
     separator = Separator(model_file_dir=str(MODEL_DIR), output_dir=str(work_dir),
@@ -302,6 +302,10 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
             with source.open("rb") as origin, target.open("xb") as destination:
                 shutil.copyfileobj(origin, destination)
             verify_output(target, output_format, tools)
+        if prepare_mix:
+            from mix_tracks import save_mix
+            stage("正在按原曲时间轴准备混音音轨")
+            save_mix(audio_path, dict(zip(required, outputs)), result_dir, work_dir, tools)
     except Exception:
         # Remove only our empty reservation; never touch history or recovery WAVs.
         if not any(result_dir.iterdir()):
