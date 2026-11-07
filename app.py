@@ -16,7 +16,8 @@ from separate import separate_audio
 from gpu_runtime import hardware_status
 from performance import MODE_CHOICES, MODES, format_metrics
 from audio_gain import format_gain_report
-from mix_tracks import mix_manifest, saved_mixes
+from mix_tracks import file_url, mix_manifest, saved_mixes
+from mix_export import render_mix
 from vocal_split import BVE_MODEL
 
 
@@ -114,6 +115,14 @@ def refresh_history():
     return gr.update(choices=saved_mixes(OUTPUT_DIR), value=None)
 
 
+def export_mix(settings: dict) -> dict[str, str]:
+    try:
+        path = render_mix(OUTPUT_DIR, settings["name"], settings["format"], settings["levels"], settings["master"])
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+        return {"error": str(error)}
+    return {"name": path.name, "url": file_url(path)}
+
+
 def create_app():
     with gr.Blocks(title="MusicVocalExtractor", analytics_enabled=False) as demo:
         gr.Markdown("# MusicVocalExtractor\n分离音乐并同步试听各音轨。所有音频处理均在本机完成。")
@@ -158,6 +167,7 @@ def create_app():
             html_template=(SOURCE_DIR / "mixer.html").read_text(encoding="utf-8"),
             css_template=(SOURCE_DIR / "mixer.css").read_text(encoding="utf-8"),
             js_on_load=(SOURCE_DIR / "mixer.js").read_text(encoding="utf-8"),
+            server_functions=[export_mix],
         )
         load.click(load_mix, inputs=history, outputs=mixer, queue=False, api_visibility="private")
         refresh.click(refresh_history, outputs=history, queue=False, api_visibility="private")

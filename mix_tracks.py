@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 from urllib.parse import quote
 
+from audio_gain import audio_peak
 from models import TRACK_LABELS
 from separate import run_tool
 
@@ -11,6 +12,8 @@ MIX_TRACK_SETS = (
     frozenset(("Vocals", "Instrumental")),
     frozenset(("LeadVocals", "BackingVocals", "Instrumental")),
 )
+MIX_FADE_SECONDS = 0.005
+MIX_CEILING = 10 ** (-2 / 20)
 
 
 def song_timeline(audio, work_dir, tools):
@@ -103,7 +106,19 @@ def file_url(path):
     return "gradio_api/file=" + quote(path.as_posix(), safe="/:")
 
 
+def mix_playback_format(frames, rate, tracks):
+    peaks = [audio_peak(path) for path in tracks.values()]
+    channels = peaks[0]["channels"]
+    if any((item["frames"], item["rate"], item["channels"]) != (frames, rate, channels) for item in peaks):
+        raise ValueError("混音音轨的样本数、采样率或声道数不一致。")
+    # 使用各轨峰值之和预留余量。统一衰减在拖动滑块时保持不变。
+    total_peak = sum(item["peak"] for item in peaks)
+    return channels, MIX_CEILING / total_peak if total_peak > MIX_CEILING else 1
+
+
 def mix_manifest(output_dir, name):
     frames, rate, paths = read_mix(output_dir, name)
+    _, headroom = mix_playback_format(frames, rate, paths)
     tracks = [{"id": label, "label": TRACK_LABELS[label], "url": file_url(path)} for label, path in paths.items()]
-    return json.dumps({"title": name, "duration": frames / rate, "tracks": tracks}, ensure_ascii=False)
+    return json.dumps({"title": name, "duration": frames / rate, "tracks": tracks,
+                       "headroom": headroom, "fadeSeconds": MIX_FADE_SECONDS}, ensure_ascii=False)

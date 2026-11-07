@@ -7,6 +7,10 @@ const time = find("[data-time]");
 const rows = find("[data-tracks]");
 const master = find("[data-master]");
 const masterValue = find("[data-master-value]");
+const exportButton = find("[data-export]");
+const exportFormat = find("[data-export-format]");
+const exportLink = find("[data-export-link]");
+const exportStatus = find("[data-export-status]");
 let context, masterGain, mix, request;
 let tracks = [];
 let sources = [];
@@ -67,18 +71,51 @@ function startSources() {
   tick();
 }
 
-function applyVolumes() {
+function effectiveVolumes() {
   const solo = tracks.some((track) => track.solo);
+  return Object.fromEntries(tracks.map((track) => [
+    track.id, track.muted || (solo && !track.solo) ? 0 : Number(track.slider.value)
+  ]));
+}
+
+function setGain(node, value) {
+  if (!node) return;
+  const parameter = node.gain;
+  const now = context.currentTime;
+  if (sources.length && typeof parameter.cancelAndHoldAtTime === "function") {
+    // 播放时在几毫秒内完成音量变化，减少瞬间跳变的声音。
+    parameter.cancelAndHoldAtTime(now);
+    parameter.linearRampToValueAtTime(value, now + 0.008);
+  } else {
+    parameter.cancelScheduledValues(now);
+    parameter.setValueAtTime(value, now);
+  }
+}
+
+function applyVolumes() {
+  const levels = effectiveVolumes();
   for (const track of tracks) {
-    const volume = Number(track.slider.value);
-    const audible = volume > 0 && (!solo || track.solo);
-    if (track.gain) track.gain.gain.value = audible ? volume / 100 : 0;
-    track.row.classList.toggle("mve-quiet", !audible);
-    track.value.textContent = volume + "%";
+    setGain(track.gain, levels[track.id] / 100);
+    track.row.classList.toggle("mve-quiet", levels[track.id] === 0);
+    track.value.textContent = track.slider.value + "%";
+    track.muteButton.textContent = track.muted ? "恢复" : "静音";
+    track.muteButton.setAttribute("aria-pressed", String(track.muted));
     track.soloButton.setAttribute("aria-pressed", String(track.solo));
   }
-  if (masterGain) masterGain.gain.value = Number(master.value) / 100;
+  if (mix) setGain(masterGain, Number(master.value) / 100 * mix.headroom);
   masterValue.textContent = master.value + "%";
+}
+
+function fadeBufferEdges(buffer, seconds) {
+  const fade = Math.min(Math.floor(buffer.sampleRate * seconds), Math.floor(buffer.length / 2));
+  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+    const samples = buffer.getChannelData(channel);
+    for (let i = 0; i < fade; i++) {
+      const gain = i / fade;
+      samples[i] *= gain;
+      samples[samples.length - 1 - i] *= gain;
+    }
+  }
 }
 
 function createTrack(track) {
@@ -97,16 +134,27 @@ function createTrack(track) {
   slider.addEventListener("input", applyVolumes);
   const value = document.createElement("output");
   value.setAttribute("for", slider.id);
+  const muteButton = document.createElement("button");
+  muteButton.type = "button";
+  muteButton.setAttribute("data-mute-track", "");
+  muteButton.setAttribute("aria-label", track.label + " 静音");
   const soloButton = document.createElement("button");
   soloButton.type = "button";
   soloButton.textContent = "Solo";
   soloButton.setAttribute("aria-label", track.label + " Solo");
-  const state = { ...track, slider, row, value, soloButton, solo: false };
+  const state = { ...track, slider, row, value, muteButton, soloButton, muted: false, solo: false };
+  muteButton.addEventListener("click", () => {
+    state.muted = !state.muted;
+    applyVolumes();
+  });
   soloButton.addEventListener("click", () => {
     state.solo = !state.solo;
     applyVolumes();
   });
-  row.append(label, slider, value, soloButton);
+  const buttons = document.createElement("div");
+  buttons.className = "mve-track-buttons";
+  buttons.append(muteButton, soloButton);
+  row.append(label, slider, value, buttons);
   rows.append(row);
   return state;
 }
@@ -123,11 +171,19 @@ function loadMix() {
   tracks = mix ? mix.tracks.map(createTrack) : [];
   controls.hidden = !mix;
   play.disabled = false;
+  exportButton.disabled = false;
+  exportLink.hidden = true;
+  exportStatus.textContent = "";
   master.value = 100;
   seek.max = mix ? mix.duration : 1;
-  message.textContent = mix ? mix.title : "分离完成后，音轨会显示在这里。";
+  message.textContent = mix ? mixTitle() : "分离完成后，音轨会显示在这里。";
   applyVolumes();
   paint();
+}
+
+function mixTitle() {
+  const db = 20 * Math.log10(mix.headroom);
+  return mix.title + (db < 0 ? " · 防削波余量 " + (-db).toFixed(1) + " dB" : "");
 }
 
 play.addEventListener("click", async () => {
@@ -158,6 +214,7 @@ play.addEventListener("click", async () => {
       if (Math.abs(buffer.duration - mix.duration) > 2 / buffer.sampleRate) {
         throw new Error(track.label + "的时长与混音时间轴不一致");
       }
+      fadeBufferEdges(buffer, mix.fadeSeconds);
       track.buffer = buffer;
       track.gain = context.createGain();
       track.gain.connect(masterGain);
@@ -166,7 +223,7 @@ play.addEventListener("click", async () => {
     if (offset >= mix.duration) offset = 0;
     applyVolumes();
     startSources();
-    message.textContent = mix.title;
+    message.textContent = mixTitle();
   } catch (error) {
     if (!pending.signal.aborted) {
       stopSources();
@@ -178,6 +235,32 @@ play.addEventListener("click", async () => {
       request = null;
       play.disabled = false;
     }
+  }
+});
+
+exportButton.addEventListener("click", async () => {
+  if (!mix) return;
+  const currentMix = mix;
+  const format = exportFormat.value;
+  exportButton.disabled = true;
+  exportLink.hidden = true;
+  exportStatus.textContent = "正在导出整首歌曲…";
+  try {
+    // 在点击时快照化设置。导出从已保存的 WAV 混合，播放进度与后续拖动互不影响。
+    const result = await server.export_mix({
+      name: currentMix.title, format, levels: effectiveVolumes(), master: Number(master.value)
+    });
+    if (mix !== currentMix) return;
+    if (!result?.url) throw new Error(result?.error || "无法连接本机混音服务。");
+    exportLink.href = result.url;
+    exportLink.download = result.name;
+    exportLink.textContent = "下载 " + format;
+    exportLink.hidden = false;
+    exportStatus.textContent = "已保存到歌曲目录的 mix-exports";
+  } catch (error) {
+    if (mix === currentMix) exportStatus.textContent = "导出失败 · " + (error.message || String(error));
+  } finally {
+    if (mix === currentMix) exportButton.disabled = false;
   }
 });
 
@@ -201,6 +284,7 @@ find("[data-reset]").addEventListener("click", () => {
   master.value = 100;
   for (const track of tracks) {
     track.slider.value = 100;
+    track.muted = false;
     track.solo = false;
   }
   applyVolumes();
@@ -208,12 +292,13 @@ find("[data-reset]").addEventListener("click", () => {
 find("[data-enable]").addEventListener("click", () => {
   for (const track of tracks) {
     if (Number(track.slider.value) === 0) track.slider.value = 100;
+    track.muted = false;
     track.solo = false;
   }
   applyVolumes();
 });
 find("[data-mute]").addEventListener("click", () => {
-  for (const track of tracks) track.slider.value = 0;
+  for (const track of tracks) track.muted = true;
   applyVolumes();
 });
 
