@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from models import DEFAULT_MODEL, MODELS, ROFORMER_MODEL, REMOVED_MODELS, check_model
+from models import DEFAULT_MODEL, MODELS, ROFORMER_MODEL, REMOVED_MODELS, TRACK_LABELS, check_model
 from runtime_paths import DATA_DIR, MODEL_DIR, OUTPUT_DIR, configure_ffmpeg
 from gpu_runtime import device_info, preload_onnx_cuda, select_device, validate_loaded_device
 from performance import inference_options, infer_with_retry
@@ -71,13 +71,13 @@ def song_title(original_name):
     return title
 
 
-def reserve_result_dir(output_dir, title):
+def reserve_result_dir(output_dir, title, longest_label="Instrumental"):
     """Atomic mkdir handles concurrent jobs; budget in Windows UTF-16 units."""
     units = lambda text: len(str(text).encode("utf-16-le")) // 2
     for index in range(1, 100000):
         suffix = "" if index == 1 else f" ({index})"
-        # Full longest path: parent / title / title_Instrumental.mp3.
-        budget = (240 - units(output_dir) - 2 - units("_Instrumental.mp3")) // 2 - units(suffix)
+        # Full longest path: parent / title / title_<longest_label>.mp3.
+        budget = (240 - units(output_dir) - 2 - units(f"_{longest_label}.mp3")) // 2 - units(suffix)
         if budget < 1:
             raise ValueError("输出根目录路径过长，请选择更短的输出路径。")
         base = title.encode("utf-16-le")[:budget * 2].decode("utf-16-le", errors="ignore").rstrip(" .") or "_"
@@ -92,9 +92,9 @@ def reserve_result_dir(output_dir, title):
     raise RuntimeError("同名结果过多，请选择其他输出目录。")
 
 
-def prepare_model(separator, model, stage, metrics=None):
+def prepare_model(separator, model, stage, metrics=None, *, arch=None):
     """Public APIs, official downloads and SHA-256; preserve existing corrupt files too."""
-    arch = check_model(model)  # Reject retired IDs before network/cache/engine access.
+    arch = arch or check_model(model)  # The legacy entry points still enforce their model whitelist.
     from filelock import FileLock, Timeout
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     try:
@@ -157,13 +157,14 @@ def named_stems(returned, folder, required):
 
 
 def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain_db=0,
-                 instrumental_gain_db=0, gain_report=None):
-    """Encode and fully decode both tracks before the caller can publish/clean."""
-    gains = {"Vocals": validate_gain(vocal_gain_db), "Instrumental": validate_gain(instrumental_gain_db)}
+                 instrumental_gain_db=0, gain_report=None, labels=("Vocals", "Instrumental")):
+    """Encode and fully decode all tracks before the caller can publish/clean."""
+    vocal_gain_db = validate_gain(vocal_gain_db)
+    instrumental_gain_db = validate_gain(instrumental_gain_db)
     gain_report = gain_report if gain_report is not None else {}
     outputs = []
-    for label in ("Vocals", "Instrumental"):
-        gain_db = gains[label]
+    for label in labels:
+        gain_db = instrumental_gain_db if label == "Instrumental" else vocal_gain_db
         report = {"requested_db": gain_db}
         gain_report[label] = report
         source = stems[label]
@@ -198,7 +199,7 @@ def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain
 def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFAULT_MODEL,
                    output_format="MP3", progress_callback=None, original_name=None, device="auto",
                    performance_mode="balanced", metrics_callback=None, vocal_gain_db=0,
-                   instrumental_gain_db=0, prepare_mix=False):
+                   instrumental_gain_db=0, prepare_mix=False, split_backing=False):
     total_start = time.perf_counter()
     vocal_gain_db = validate_gain(vocal_gain_db)
     instrumental_gain_db = validate_gain(instrumental_gain_db)
@@ -224,7 +225,8 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         from audio_separator.separator import Separator
     except ImportError as error:
         raise RuntimeError(f"AI 依赖未能导入：{error}。请检查项目虚拟环境。") from error
-    selected = select_device(device, cpu)
+    prepare_mix = prepare_mix or split_backing
+    selected = select_device(device, cpu, allow_cpu_fallback=prepare_mix)
     info = device_info(selected)
     stats = dict(info, mode=performance_mode, oom_retries=0, model=model_name, requested_model=requested_model)
     options = inference_options(model_name, performance_mode, selected, info.get("free_bytes"))
@@ -232,6 +234,8 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     if selected == "cuda":
         torch.cuda.reset_peak_memory_stats()
     stage(f"推理设备：{info['name']}（{selected.upper()}）；PyTorch {info['torch']}")
+    if prepare_mix and selected == "cpu" and device == "auto" and not cpu:
+        stage("自动模式选择 CPU；CUDA 不可用或启动配置指定了 CPU。")
     if selected == "cuda" and arch == "MDX":
         preload_onnx_cuda()
     output_dir = Path(output_dir).expanduser().resolve()
@@ -243,7 +247,8 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         outputs = _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
                                  output_format, tools, stage, original_name, selected == "cpu", torch,
                                  options=options, metrics=stats, vocal_gain_db=vocal_gain_db,
-                                 instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix)
+                                 instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix,
+                                 split_backing=split_backing)
         stats["total_seconds"] = time.perf_counter() - total_start
         if selected == "cuda":
             stats["peak_bytes"] = torch.cuda.max_memory_allocated()
@@ -256,7 +261,7 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
 
 def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
                    output_format, tools, stage, original_name, cpu, torch, options=None, metrics=None,
-                   vocal_gain_db=0, instrumental_gain_db=0, prepare_mix=False):
+                   vocal_gain_db=0, instrumental_gain_db=0, prepare_mix=False, split_backing=False):
     metrics = metrics if metrics is not None else {}
     prepare_start = time.perf_counter()
     separator = Separator(model_file_dir=str(MODEL_DIR), output_dir=str(work_dir),
@@ -284,19 +289,41 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
     stems = named_stems(returned, stem_dir, required)
     for path in stems.values():
         verify_output(path, "WAV", tools)
+    timeline = None
+    if split_backing:
+        from vocal_split import BVE_MODEL, VOCAL_LABELS, split_vocals
+
+        # 后续模型只读取中间 WAV，先释放第一阶段的模型及空闲显存。
+        del separator
+        if not cpu:
+            torch.cuda.empty_cache()
+        bve_start = time.perf_counter()
+        selected = "cpu" if cpu else "cuda"
+        split = split_vocals(Separator, stems["Vocals"], work_dir / "bve", MODEL_DIR, selected, stage)
+        required = (*VOCAL_LABELS, "Instrumental")
+        stems = {**split, "Instrumental": stems["Instrumental"]}
+        metrics.update(vocal_model=BVE_MODEL, vocal_device=selected, vocal_seconds=time.perf_counter() - bve_start)
+        if output_format == "WAV":
+            from mix_tracks import align_track, song_timeline
+
+            timeline = song_timeline(audio_path, work_dir, tools)
+            aligned = work_dir / "aligned"
+            aligned.mkdir()
+            for label in required:
+                stems[label] = align_track(stems[label], aligned / f"{label}.wav", timeline, tools)
     stage("正在导出音频" + ("：MP3 320 kbps" if output_format == "MP3" else "：WAV PCM"))
     export_start = time.perf_counter()
-    result_dir = reserve_result_dir(output_dir, song_title(original_name or audio_path.name))
+    result_dir = reserve_result_dir(output_dir, song_title(original_name or audio_path.name), max(required, key=len))
     staging = work_dir / "export"
     staging.mkdir()
     try:
         gain_report = {}
         encoded = export_stems(stems, staging, output_format, tools, result_dir.name,
                                vocal_gain_db=vocal_gain_db, instrumental_gain_db=instrumental_gain_db,
-                               gain_report=gain_report)
+                               gain_report=gain_report, labels=required)
         metrics["stem_gains"] = gain_report
-        stage(format_gain_report(gain_report["Vocals"], "人声"))
-        stage(format_gain_report(gain_report["Instrumental"], "伴奏"))
+        for label in required:
+            stage(format_gain_report(gain_report[label], TRACK_LABELS[label]))
         outputs = tuple(result_dir / path.name for path in encoded)
         for source, target in zip(encoded, outputs):
             with source.open("rb") as origin, target.open("xb") as destination:
@@ -305,7 +332,7 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
         if prepare_mix:
             from mix_tracks import save_mix
             stage("正在按原曲时间轴准备混音音轨")
-            save_mix(audio_path, dict(zip(required, outputs)), result_dir, work_dir, tools)
+            save_mix(audio_path, dict(zip(required, outputs)), result_dir, work_dir, tools, timeline=timeline)
     except Exception:
         # Remove only our empty reservation; never touch history or recovery WAVs.
         if not any(result_dir.iterdir()):

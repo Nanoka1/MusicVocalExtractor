@@ -1,14 +1,14 @@
 """为混音器保存与原曲采样对齐的 WAV，以及可重新加载的时间轴。"""
 import json
+import shutil
 from pathlib import Path
 from urllib.parse import quote
 
+from models import TRACK_LABELS
 from separate import run_tool
 
-TRACK_LABELS = {"Vocals": "人声", "Instrumental": "伴奏"}
 
-
-def save_mix(audio, stems, result_dir, work_dir, tools):
+def song_timeline(audio, work_dir, tools):
     import soundfile as sf
 
     ffmpeg = [tools["ffmpeg"], "-nostdin", "-v", "error", "-xerror", "-n"]
@@ -16,18 +16,36 @@ def save_mix(audio, stems, result_dir, work_dir, tools):
     reference = work_dir / "timeline.wav"
     run_tool(ffmpeg + ["-i", str(audio), "-map", "0:a:0", "-c:a", "pcm_s16le", str(reference)])
     original = sf.info(str(reference))
-    frames, rate, channels = original.frames, original.samplerate, original.channels
+    return original.frames, original.samplerate, original.channels
+
+
+def align_track(source, target, timeline, tools):
+    import soundfile as sf
+
+    frames, rate, channels = timeline
+    original = sf.info(str(source))
+    if source.suffix.lower() == ".wav" and (original.frames, original.samplerate, original.channels) == timeline:
+        with target.open("xb") as destination, source.open("rb") as data:
+            shutil.copyfileobj(data, destination)
+    else:
+        # 起点保持在采样 0，只在末尾裁剪或补零。
+        run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-xerror", "-n",
+                  "-i", str(source), "-map", "0:a:0", "-af",
+                  f"aresample={rate},apad=whole_len={frames},atrim=end_sample={frames}",
+                  "-ac", str(channels), "-c:a", "pcm_s24le", str(target)])
+        rendered = sf.info(str(target))
+        if (rendered.frames, rendered.samplerate, rendered.channels) != timeline:
+            raise RuntimeError(f"混音轨道格式与原曲不一致：{target.name}")
+    return target
+
+
+def save_mix(audio, stems, result_dir, work_dir, tools, timeline=None):
+    timeline = timeline or song_timeline(audio, work_dir, tools)
+    frames, rate, _ = timeline
     mix = result_dir / "mix"
     mix.mkdir()
     for label, source in stems.items():
-        target = mix / f"{label}.wav"
-        # 起点保持在采样 0，只在末尾裁剪或补零；各轨采用同一原曲格式。
-        run_tool(ffmpeg + ["-i", str(source), "-map", "0:a:0", "-af",
-                           f"aresample={rate},apad=whole_len={frames},atrim=end_sample={frames}",
-                           "-ac", str(channels), "-c:a", "pcm_s24le", str(target)])
-        rendered = sf.info(str(target))
-        if (rendered.frames, rendered.samplerate, rendered.channels) != (frames, rate, channels):
-            raise RuntimeError(f"混音轨道格式与原曲不一致：{label}")
+        align_track(source, mix / f"{label}.wav", timeline, tools)
     # 轨道全部校验后才写清单，历史下拉列表只显示有完整清单的任务。
     pending = mix / "timeline.tmp"
     pending.write_text(json.dumps({"frames": frames, "rate": rate, "tracks": list(stems)}), encoding="utf-8")

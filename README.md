@@ -2,28 +2,29 @@
 
 项目内 Python、start.bat 和新版 EXE 默认共用根目录 `outputs/`、`models/`，路径解析与历史迁移见 [OUTPUT_PATHS.md](OUTPUT_PATHS.md)。RTX 5060 恢复后的 CUDA、三模型、性能模式与 GPU EXE 验收见 [GPU_VALIDATION.md](GPU_VALIDATION.md)。CUDA 不要求独显直连，不需要修改驱动或系统设置。
 
-一个在自己电脑上使用的 **AI 人声与伴奏分离工具**。
+一个在自己电脑上使用的 **AI 音乐分离和混音工具**。
 
-放入一首歌，点击“开始分离”，就能得到两份音频：一份是**人声**，另一份是**伴奏**。可以直接试听，也可以保存下来，用来练唱、练耳或学习歌曲。
+上传一首歌，选择「人声与伴奏」或「主唱与和声」，点击「开始分离」。生成的音轨可以一起试听，也可以单独下载。
 
 ## 能做什么？
 
 - **分开人声和伴奏**：支持导入 MP3、WAV、FLAC、M4A。
 - **选择保存格式**：默认导出 MP3（320 kbps），也可以选择 WAV。
-- **切换不同模型**：可以比较哪种更适合这首歌；首次使用某个模型时自动下载，之后复用。
+- **提取主唱与背景和声**：Kim MelBand RoFormer 先分离人声，UVR-BVE-4B v1 再从人声中提取主唱与背景和声。模型首次使用时自动下载并校验，之后复用缓存。
 - **查看处理状态**：告诉你当前正在检查文件、下载模型、分离还是导出。
-- **试听和下载**：处理完成后，两条音轨都能单独试听、下载；每次结果分开保存，原歌曲保持不变。
+- **多轨混音**：一起播放、暂停或跳转。每条音轨可独立调音量，拉到 0% 即静音，再向右拖动即可恢复。支持总音量、Solo、恢复默认、开启全部和静音全部。
+- **下载和重新载入**：本次音轨可单独下载。以后可以从「已保存的混音」载入结果，直接试听。
 
 ## 怎么使用？
 
 1. 第一次使用，按下方的[启动说明](#windows-双击启动)准备 Python 3.12 和 FFmpeg。
 2. 双击项目里的 `start.bat`，浏览器会自动打开操作页面。
-3. 选择歌曲、分离模型和输出格式，点击 **“开始分离”**。
+3. 选择歌曲、分离模式和输出格式，点击 **“开始分离”**。
 4. 完成后试听或下载，也可以在 `outputs` 文件夹里找到结果。
 
 浏览器只是操作界面，歌曲在你的电脑上处理，不上传到云端。第一次安装依赖、下载模型需要联网。没有 NVIDIA 显卡也可以使用 CPU 处理，但可能需要多等一会儿。
 
-分离效果会因歌曲而异，可能仍有少量人声或乐器残留，可以换一个模型比较效果。
+分离效果会随歌曲变化，主唱与和声可能有串音。模型选型、吉他角色候选及本机整曲测试见 [MULTITRACK_MODELS.md](MULTITRACK_MODELS.md)。
 
 > GitHub 提供的是源码，不包含 Python 环境、模型、个人音频或现成 EXE。想自己打包 EXE，可以查看下面的技术说明。
 
@@ -36,9 +37,9 @@
 
 **已配置好环境后，双击 `start.bat` 即可使用网页版本。** 首次下载源码请按下方说明准备本机 Python 3.12、FFmpeg 和项目虚拟环境。虚拟环境、模型、音频、EXE 和本地诊断资料不随 GitHub 源码分发。本机已有环境若依赖 `.tools/python312`，请保留该基础运行时。
 
-使用步骤：上传音乐 → 在「选择 AI 分离模型」选择模型 → 在「输出音频格式」选择 MP3（默认）或 WAV → 点击「开始分离」→ 试听及下载两条音轨。首次使用模型由 Audio Separator 官方机制下载并校验 SHA-256，之后复用缓存。
+首次使用模型由 Audio Separator 官方机制下载并校验 SHA-256，之后复用缓存。自动设备模式优先用 CUDA，初始化不可用时会在分离状态中提示并使用 CPU。显式选择 CUDA 时，设备不可用会报错。
 
-人声与伴奏各有独立的 **0～+12 dB** 增益滑块，默认均为 **0 dB**，步长 0.1 dB，旁边实时显示设置值。增益只在分离完成后应用于对应音轨，试听和下载使用同一导出文件。处理方式、峰值保护及测试范围见 [AUDIO_GAIN.md](AUDIO_GAIN.md)。
+分离前设置的**导出增益**为 0～+12 dB。主唱和背景和声沿用人声设置，正增益启用峰值保护。混音器的 0～100% 滑块即时调整浏览器试听音量。导出增益处理详见 [AUDIO_GAIN.md](AUDIO_GAIN.md)。
 
 CLI 示例（两个参数均可省略，默认 0 dB）：
 
@@ -46,11 +47,11 @@ CLI 示例（两个参数均可省略，默认 0 dB）：
 .\.venv-gpu\Scripts\python.exe separate.py "音乐.mp3" --vocal-gain-db 6 --instrumental-gain-db 3
 ```
 
-Python API 支持 `separate_audio(path, vocal_gain_db=6, instrumental_gain_db=3)`；Gradio `/separate` API 使用同名参数。修改增益后需重新开始分离，当前成功任务会清理原始中间 WAV，因此没有追加永久缓存用于分离后重新调音。
+Python API 和 Gradio `/separate` 保留两轨输出及原有导出增益参数。Python 调用可通过 `split_backing=True` 请求主唱、和声与伴奏。网页的「开始分离」使用独立的 `/mix` 入口并保存混音时间轴。
 
 当前可选及默认模型为 **MelBand RoFormer · Kim**（`vocals_mel_band_roformer.ckpt`），复用已下载的约 913 MB 权重；Windows CPU 与 RTX 5060 CUDA 加载/推理已验证。按用户明确选择停用 Voc FT（`UVR-MDX-NET-Voc_FT.onnx`）和 Inst HQ 3（`UVR-MDX-NET-Inst_HQ_3.onnx`），不再提供这两个选项或下载它们。此前移除的 Karaoke 2、htdemucs 不恢复；其他模型权重和通用 MDX/ONNX 推理依赖不受影响。尚未完成真实歌曲音质 AB 验证，不将默认设置等同于音质排名。参数和旧配置处理见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)，候选研究见 [MODEL_RESEARCH.md](MODEL_RESEARCH.md)，此前升级记录见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)。
 
-MP3 通过 FFmpeg `libmp3lame -b:a 320k` 真正编码，检查编码、比特率、采样率和声道，并完整解码两轨。只有两轨均成功才发布，随后删除本任务临时工作目录；WAV 模式只发布两条 PCM WAV。试听及下载使用同一结果文件。失败时不显示成功，恢复 WAV 和已编码音轨保留在错误消息指出的 `cache/separation/work_*/`，不会清理历史输出。
+MP3 通过 FFmpeg `libmp3lame -b:a 320k` 编码，每轨都会核验格式并完整解码。网页另保存与原曲解码时间轴一致的 `mix/*.wav` 和 `mix/timeline.json`，便于同步播放及重新载入，因此会占用额外磁盘空间。「主唱与和声」模式选择 WAV 时，下载文件也保持原曲的采样率、声道数和样本数。失败时恢复 WAV 和已编码音轨保留在错误提示所列的 `cache/separation/work_*/`。
 
 Python 版模型和输出位于项目 `models/`、`outputs/歌曲名/`。Gradio 在预处理上传元信息时保留 `FileData.orig_name`，不将缓存路径名误当歌曲名；CLI 使用输入路径文件名。名称清理 Windows 非法字符及保留设备名，按 UTF-16 路径预算截短；通过原子 mkdir 分配同名的 `歌曲名 (2)`、`歌曲名 (3)`，支持并发，不覆盖历史。EXE 版默认位于 EXE 旁的相应目录；目录不可写时使用 `%LOCALAPPDATA%/MusicVocalExtractor/`。可通过 `MVE_DATA_DIR` 指定数据根目录；原有 `AUDIO_SEPARATOR_MODEL_DIR` 模型路径配置继续有效。
 

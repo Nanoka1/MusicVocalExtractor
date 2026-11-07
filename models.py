@@ -6,6 +6,8 @@ MODELS = {
     ROFORMER_MODEL: ("默认 · MelBand RoFormer · Kim（高质量人声，CPU 较慢）", "MDXC"),
 }
 MODEL_CHOICES = [(f"{label} — {filename}", filename) for filename, (label, _) in MODELS.items()]
+TRACK_LABELS = {"Vocals": "人声", "Instrumental": "伴奏",
+                "LeadVocals": "主唱", "BackingVocals": "背景和声"}
 
 
 def check_model(model):

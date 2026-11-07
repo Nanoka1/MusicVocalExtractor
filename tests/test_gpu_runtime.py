@@ -17,6 +17,15 @@ class DeviceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "CUDA 初始化/运算失败"):
                 select_device("cuda")
 
+    def test_mixer_auto_falls_back_when_cuda_is_unavailable_or_fails(self):
+        with patch.dict("os.environ", {"MVE_DEVICE": "auto"}):
+            with patch("torch.cuda.is_available", return_value=False):
+                self.assertEqual(select_device("auto", allow_cpu_fallback=True), "cpu")
+                with self.assertRaisesRegex(RuntimeError, "GPU 初始化失败"):
+                    select_device("cuda", allow_cpu_fallback=True)
+            with patch("torch.cuda.is_available", return_value=True), patch("torch.zeros", side_effect=RuntimeError("DLL failure")):
+                self.assertEqual(select_device("auto", allow_cpu_fallback=True), "cpu")
+
     def test_onnx_fallback_is_rejected(self):
         session = SimpleNamespace(get_providers=lambda: ["CPUExecutionProvider"], run=lambda: None,
                                   disable_fallback=lambda: None)

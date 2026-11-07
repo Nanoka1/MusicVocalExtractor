@@ -11,12 +11,13 @@ os.environ.setdefault("GRADIO_TEMP_DIR", str(DATA_DIR / "cache" / "gradio"))
 
 import gradio as gr
 
-from models import DEFAULT_MODEL, MODEL_CHOICES
+from models import DEFAULT_MODEL, MODEL_CHOICES, TRACK_LABELS
 from separate import separate_audio
 from gpu_runtime import hardware_status
 from performance import MODE_CHOICES, MODES, format_metrics
 from audio_gain import format_gain_report
 from mix_tracks import mix_manifest, saved_mixes
+from vocal_split import BVE_MODEL
 
 
 class UploadedAudio(gr.File):
@@ -40,11 +41,12 @@ def extract_vocals(audio_path, model_name=DEFAULT_MODEL, output_format="MP3", pe
 
 
 def separation_updates(audio_path, model_name, output_format, performance_mode, device,
-                       vocal_gain_db, instrumental_gain_db, progress, prepare_mix=False):
+                       vocal_gain_db, instrumental_gain_db, progress, prepare_mix=False, split_backing=False):
     if not audio_path:
         yield None, "请先选择一个音乐文件。"
         return
     events = queue.Queue()
+    active_models = f"{model_name} → {BVE_MODEL}" if split_backing else model_name
 
     def worker():
         try:
@@ -53,6 +55,7 @@ def separation_updates(audio_path, model_name, output_format, performance_mode, 
                                     original_name=getattr(audio_path, "original_name", None),
                                     performance_mode=performance_mode, device=device, vocal_gain_db=vocal_gain_db,
                                     instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix,
+                                    split_backing=split_backing,
                                     metrics_callback=stats.update,
                                     progress_callback=lambda message: events.put(("stage", message)))
             events.put(("done", (result, stats)))
@@ -60,32 +63,35 @@ def separation_updates(audio_path, model_name, output_format, performance_mode, 
             logging.exception("音频分离失败")
             events.put(("error", str(error)))
 
-    yield None, f"模型：{model_name}\n正在检查音频文件"
+    yield None, f"模型：{active_models}\n正在检查音频文件"
     threading.Thread(target=worker, daemon=True, name="audio-separation").start()
     while True:
         kind, payload = events.get()
         if kind == "stage":
             progress(None, desc=payload)
-            yield None, f"模型：{model_name}\n{payload}"
+            yield None, f"模型：{active_models}\n{payload}"
         elif kind == "error":
-            yield None, f"模型：{model_name}\n分离失败：{payload}"
+            yield None, f"模型：{active_models}\n分离失败：{payload}"
             return
         else:
             paths, stats = payload
-            yield paths, (f"分离完成！\n歌曲：{paths[0].parent.name}\n"
-                                        f"人声：{paths[0].name}\n伴奏：{paths[1].name}\n"
-                                        f"保存位置：{paths[0].parent}\n模型：{stats.get('model', model_name)}\n"
-                                        f"{format_gain_report(stats.get('stem_gains', {}).get('Vocals', {}), '人声')}\n"
-                                        f"{format_gain_report(stats.get('stem_gains', {}).get('Instrumental', {}), '伴奏')}\n"
-                                        f"{format_metrics(stats)}")
+            gains = stats["stem_gains"]
+            files = "\n".join(f"{TRACK_LABELS[label]}：{path.name}" for label, path in zip(gains, paths))
+            reports = "\n".join(format_gain_report(report, TRACK_LABELS[label]) for label, report in gains.items())
+            used_models = f"{stats['model']} → {stats['vocal_model']}" if split_backing else stats["model"]
+            status = (f"分离完成！\n歌曲：{paths[0].parent.name}\n{files}\n"
+                      f"保存位置：{paths[0].parent}\n模型：{used_models}\n{reports}\n{format_metrics(stats)}")
+            if split_backing:
+                status += f"\n和声推理设备：{stats['vocal_device'].upper()}，模型阶段 {stats['vocal_seconds']:.2f} 秒"
+            yield paths, status
             return
 
 
 def extract_for_mixer(audio_path, model_name, output_format, performance_mode, device,
-                      vocal_gain_db, instrumental_gain_db, progress=gr.Progress()):
+                      vocal_gain_db, instrumental_gain_db, mode="two", progress=gr.Progress()):
     for paths, status in separation_updates(audio_path, model_name, output_format, performance_mode,
                                             device, vocal_gain_db, instrumental_gain_db, progress,
-                                            prepare_mix=True):
+                                            prepare_mix=True, split_backing=mode == "vocals"):
         if not paths:
             yield None, status, None, gr.skip()
             continue
@@ -107,11 +113,13 @@ def refresh_history():
 
 def create_app():
     with gr.Blocks(title="MusicVocalExtractor", analytics_enabled=False) as demo:
-        gr.Markdown("# MusicVocalExtractor\n选择音乐，提取人声和伴奏。所有音频处理均在本机完成。")
+        gr.Markdown("# MusicVocalExtractor\n分离音乐并同步试听各音轨。所有音频处理均在本机完成。")
         gr.Textbox(label="当前输出目录", value=str(OUTPUT_DIR), interactive=False)
         audio = UploadedAudio(label="选择音乐文件（MP3、WAV、FLAC、M4A）",
                         file_types=[".mp3", ".wav", ".flac", ".m4a"], type="filepath")
         model = gr.Dropdown(label="选择 AI 分离模型", choices=MODEL_CHOICES, value=DEFAULT_MODEL)
+        mode = gr.Radio(label="分离模式", choices=[("人声与伴奏", "two"), ("主唱与和声", "vocals")], value="two",
+                        info=f"主唱与和声模式先分离人声，再由 {BVE_MODEL} 处理，伴奏保留为一轨。")
         output_format = gr.Dropdown(label="输出音频格式", choices=[("MP3（320 kbps）", "MP3"), ("WAV（无损 PCM）", "WAV")], value="MP3")
         with gr.Row():
             with gr.Column():
@@ -124,7 +132,7 @@ def create_app():
                     queue=False, api_name=False)
         instrumental_gain.change(lambda value: f"**伴奏增益：+{value:.1f} dB**", inputs=instrumental_gain,
                                  outputs=instrumental_gain_label, queue=False, api_name=False)
-        gr.Markdown("导出增益在分离前设置，正增益启用峰值保护。下方混音器的滑块实时调整试听音量。")
+        gr.Markdown("导出增益在分离前设置，正增益启用峰值保护。主唱与和声沿用人声导出增益。下方混音器可独立调整各轨试听音量。")
         performance = gr.Dropdown(label="AI 分离性能模式", choices=MODE_CHOICES, value="balanced")
         device = gr.Dropdown(label="推理设备", choices=[("自动检测", "auto"), ("CUDA GPU（不可用时报错）", "cuda"), ("CPU", "cpu")], value=os.environ.get("MVE_DEVICE", "auto"))
         hardware = gr.Textbox(label="GPU 加速状态", value=hardware_status(), interactive=False)
@@ -150,7 +158,7 @@ def create_app():
         refresh.click(refresh_history, outputs=history, queue=False, api_visibility="private")
         demo.load(refresh_history, outputs=history, queue=False, api_visibility="private")
         inputs = [audio, model, output_format, performance, device, gain, instrumental_gain]
-        start.click(extract_for_mixer, inputs=inputs, outputs=[downloads, status, mixer, history],
+        start.click(extract_for_mixer, inputs=[*inputs, mode], outputs=[downloads, status, mixer, history],
                     concurrency_limit=1, concurrency_id="separation", api_name="mix")
         # 单独保留已有 HTTP 接口，界面试听统一交给多轨播放器。
         with gr.Column(visible=False):
