@@ -61,20 +61,20 @@ class OutputTests(unittest.TestCase):
             for ext in ("mp3", "wav", "flac", "m4a"):
                 audio = root / ("cached." + ext)
                 run_tool([tools["ffmpeg"], "-v", "error", "-n", "-i", str(source), str(audio)])
-                for fmt in ("MP3", "WAV"):
-                    with self.subTest(input=ext, output=fmt):
-                        work = root / (ext + fmt)
-                        work.mkdir()
-                        with patch("separate.prepare_model"), patch("separate.validate_loaded_device"), patch("performance.observe_forward", return_value=[]):
-                            outputs = _separate_task(Engine, audio, results, work, DEFAULT_MODEL, fmt,
-                                                     tools, lambda _: None, "周杰伦 - 晴天.mp3", True, torch)
-                        self.assertFalse(work.exists())
-                        self.assertEqual(set(outputs[0].parent.iterdir()), set(outputs))
-                        for path in outputs:
-                            self.assertEqual(path.suffix, "." + fmt.lower())
-                            self.assertTrue(path.name.startswith(path.parent.name + "_"))
-                            stream = verify_output(path, fmt, tools)
-                            self.assertEqual((stream["sample_rate"], stream["channels"]), ("44100", 2))
+                fmt = "MP3"
+                with self.subTest(input=ext, output=fmt):
+                    work = root / (ext + fmt)
+                    work.mkdir()
+                    with patch("separate.prepare_model"), patch("separate.validate_loaded_device"), patch("performance.observe_forward", return_value=[]):
+                        outputs = _separate_task(Engine, audio, results, work, DEFAULT_MODEL, fmt,
+                                                 tools, lambda _: None, "周杰伦 - 晴天.mp3", True, torch)
+                    self.assertFalse(work.exists())
+                    self.assertEqual(set(outputs[0].parent.iterdir()), set(outputs))
+                    for path in outputs:
+                        self.assertEqual(path.suffix, "." + fmt.lower())
+                        self.assertTrue(path.name.startswith(path.parent.name + "_"))
+                        stream = verify_output(path, fmt, tools)
+                        self.assertEqual((stream["sample_rate"], stream["channels"]), ("44100", 2))
 
             work = root / "failure"
             work.mkdir()

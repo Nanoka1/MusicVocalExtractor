@@ -67,7 +67,7 @@ class ModelTests(unittest.TestCase):
                         ["ffmpeg", "-v", "error", "-y", "-i", str(source), str(audio)],
                         check=True,
                     )
-                    vocals, instrumental = separate_audio(audio, folder / "results", cpu=True, output_format="WAV")
+                    vocals, instrumental = separate_audio(audio, folder / "results", cpu=True)
                     self.assertNotIn(vocals.parent, result_folders)
                     result_folders.add(vocals.parent)
                     stems = []

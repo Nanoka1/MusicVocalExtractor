@@ -20,7 +20,6 @@
 .mve-track-buttons { display: flex; gap: 0.4rem; }
 .mve-track-buttons button { min-width: 4.5em; white-space: nowrap; }
 .mve-export { border-top: 1px solid var(--border-color-primary); padding-top: 0.6rem; }
-.mve-export select { margin-left: 0.3rem; }
 .mve-export a { color: var(--link-text-color); text-decoration: underline; }
 .mve-mixer input[type="range"] { accent-color: var(--color-accent); }
 .mve-track.mve-quiet { opacity: 0.6; }

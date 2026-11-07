@@ -9,9 +9,13 @@ from verify_release import package_manifest
 
 
 def validate_candidate(package, require_gpu=True):
+    from runtime_paths import web_revision
+
     report = json.loads((package / "release-validation.json").read_text(encoding="utf-8"))
     if not (report.get("passed") and report.get("gpu" if require_gpu else "cpu") and report.get("http_preview_download") and report.get("models_shared")):
         raise RuntimeError("候选没有通过完整设备/网页/缓存验收。")
+    if report.get("web_revision") != web_revision() or not report.get("mp3_mix"):
+        raise RuntimeError("候选没有通过当前网页版本及 MP3 混音验收。")
     if package_manifest(package) != report.get("manifest"):
         raise RuntimeError("候选文件与实测清单不同，请重新验证。")
     return report
@@ -33,18 +37,24 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--cpu", action="store_true")
+    parser.add_argument("--build-id", help="发布对应构建编号的候选包")
     parser.add_argument("--backup-name", help="为本次升级指定 .reference 下的新回退目录名；不覆盖已有回退")
     args = parser.parse_args()
     if args.backup_name and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", args.backup_name):
         parser.error("回退目录名只能包含英文字母、数字、下划线和连字符，最多 64 字符。")
+    if args.build_id and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,39}", args.build_id):
+        parser.error("构建编号无效。")
     root = Path(__file__).resolve().parent
     dist = (root / "dist").resolve()
-    candidate = (dist / ("candidate-cpu" if args.cpu else "candidate-gpu") / "MusicVocalExtractor").resolve(strict=True)
+    flavor = "cpu" if args.cpu else "gpu"
+    suffix = f"-{args.build_id}" if args.build_id else ""
+    candidate = (dist / f"candidate-{flavor}{suffix}" / "MusicVocalExtractor").resolve(strict=True)
     target = (dist / "MusicVocalExtractor").resolve()
     if not candidate.is_relative_to(dist) or not target.is_relative_to(dist):
         raise RuntimeError("发布路径超出项目 dist。")
     validate_candidate(candidate, require_gpu=not args.cpu)
-    backup_name = args.backup_name or ("formal-exe-rollback" if args.cpu else "formal-before-gpu-rollback")
+    backup_name = args.backup_name or (f"formal-before-{args.build_id}" if args.build_id else
+                                       ("formal-exe-rollback" if args.cpu else "formal-before-gpu-rollback"))
     backup = (root / ".reference" / backup_name).resolve()
     if target.exists() and backup.exists():
         raise RuntimeError("固定回退目录已存在，保留正式版和候选；请先审查回退保留方案。")

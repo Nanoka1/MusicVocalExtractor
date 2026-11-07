@@ -8,7 +8,7 @@ from uuid import uuid4
 from audio_gain import audio_peak
 from mix_tracks import MIX_FADE_SECONDS, mix_playback_format, read_mix
 from runtime_paths import configure_ffmpeg
-from separate import run_tool, verify_output
+from separate import encode_mp3
 
 
 def volume_ratio(value):
@@ -44,8 +44,8 @@ def write_mix_wav(target, tracks, gains, frames, rate, channels):
 
 
 def render_mix(output_dir, name, output_format, levels, master):
-    if output_format not in ("WAV", "MP3"):
-        raise ValueError("请选择 WAV 或 MP3 格式。")
+    if output_format != "MP3":
+        raise ValueError("混音仅支持 MP3（320 kbps）导出。")
     frames, rate, tracks = read_mix(output_dir, name)
     if not isinstance(levels, dict) or levels.keys() != tracks.keys():
         raise ValueError("导出设置与当前音轨不一致，请重新载入混音。")
@@ -53,33 +53,19 @@ def render_mix(output_dir, name, output_format, levels, master):
     master = volume_ratio(master)
     channels, headroom = mix_playback_format(frames, rate, tracks)
     gains = {label: level * master * headroom for label, level in ratios.items()}
-    folder = next(iter(tracks.values())).parent.parent / "mix-exports"
+    folder = Path(output_dir).resolve() / name / "mix-exports"
     if folder.resolve() != folder:
         raise ValueError("混音导出目录必须位于当前歌曲目录内。")
     folder.mkdir(exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    target = folder / f"混音-{stamp}-{uuid4().hex[:8]}.{output_format.lower()}"
+    target = folder / f"混音-{stamp}-{uuid4().hex[:8]}.mp3"
     tools = configure_ffmpeg()
     with TemporaryDirectory(prefix=".render-", dir=folder) as staging:
         wav = Path(staging) / "mix.wav"
         write_mix_wav(wav, tracks, gains, frames, rate, channels)
-        candidate = wav
-        result_rate, result_channels = rate, channels
-        if output_format == "MP3":
-            candidate = wav.with_suffix(".mp3")
-            # 320 kbps MP3 支持 32/44.1/48 kHz 和至多两个声道。
-            result_rate = rate if rate in (32000, 44100, 48000) else 44100
-            result_channels = min(2, channels)
-            run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(wav),
-                      "-map", "0:a:0", "-ar", str(result_rate), "-ac", str(result_channels),
-                      "-c:a", "libmp3lame", "-b:a", "320k", str(candidate)])
-        verify_output(candidate, output_format, tools)
-        actual = audio_peak(candidate)
-        if (actual["rate"], actual["channels"]) != (result_rate, result_channels) or abs(
-            actual["frames"] - round(frames * result_rate / rate)
-        ) > (1 if result_rate != rate else 0):
-            raise ValueError("混音导出后音频规格与时间轴不一致。")
-        if actual["peak"] >= 1:
+        candidate = wav.with_suffix(".mp3")
+        encode_mp3(wav, candidate, tools)
+        if audio_peak(candidate)["peak"] >= 1:
             raise ValueError("编码后的音频达到满幅，请降低总音量再导出。")
         candidate.rename(target)
     return target

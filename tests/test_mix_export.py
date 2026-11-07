@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from mix_export import render_mix
+from mix_export import render_mix, write_mix_wav
 from mix_tracks import MIX_CEILING, mix_manifest
 from separate import verify_output
 from runtime_paths import configure_ffmpeg
@@ -25,7 +25,7 @@ class MixExportTests(unittest.TestCase):
         )
         return name
 
-    def test_wav_matches_preview_levels_and_reserves_headroom(self):
+    def test_internal_mix_matches_preview_and_publishes_only_mp3(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             rate, frames = 48000, 72001
@@ -40,18 +40,26 @@ class MixExportTests(unittest.TestCase):
             headroom = preview["headroom"]
             self.assertAlmostEqual(headroom, MIX_CEILING / 2.4)
             levels = {"LeadVocals": 100, "BackingVocals": 0, "Instrumental": 50}
-            first = render_mix(root, name, "WAV", levels, 80)
-            output, actual_rate = sf.read(first)
+            paths = {label: root / name / "mix" / f"{label}.wav" for label in levels}
+            internal = root / "test-reference.wav"
+            write_mix_wav(internal, paths, {k: v / 100 * .8 * headroom for k, v in levels.items()}, frames, rate, 1)
+            output, actual_rate = sf.read(internal)
             self.assertEqual((len(output), actual_rate), (frames, rate))
             np.testing.assert_allclose(output[240:-240], (.8 * headroom * (lead + accompaniment / 2))[240:-240],
                                        atol=2e-7, rtol=0)
             self.assertEqual((output[0], output[-1]), (0, 0))
-            second = render_mix(root, name, "WAV", dict.fromkeys(levels, 100), 100)
+            first = render_mix(root, name, "MP3", levels, 80)
+            second = render_mix(root, name, "MP3", dict.fromkeys(levels, 100), 100)
             self.assertNotEqual(first, second)
             self.assertTrue(first.is_file())
-            self.assertLessEqual(np.abs(sf.read(second)[0]).max(), MIX_CEILING + 2e-7)
+            self.assertLess(np.abs(sf.read(second)[0]).max(), 1)
+            self.assertEqual(set(first.parent.iterdir()), {first, second})
+            actual, _ = sf.read(first)
+            self.assertLess(np.linalg.norm(actual - output) / np.linalg.norm(output), .03)
             with self.assertRaises(ValueError):
-                render_mix(root, name, "WAV", {**levels, "LeadVocals": float("nan")}, 100)
+                render_mix(root, name, "MP3", {**levels, "LeadVocals": float("nan")}, 100)
+            with self.assertRaisesRegex(ValueError, "仅支持 MP3"):
+                render_mix(root, name, "WAV", levels, 100)
 
     def test_mp3_keeps_duration_and_supports_nonstandard_source_rate(self):
         with tempfile.TemporaryDirectory() as folder:

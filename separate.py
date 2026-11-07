@@ -1,4 +1,4 @@
-"""Audio Separator wrapper: verified models, named stems and PCM/MP3 export."""
+"""Audio Separator wrapper: verified models, named stems and MP3 export."""
 import argparse
 import json
 import re
@@ -57,6 +57,28 @@ def verify_output(path, output_format, tools):
     elif not codec.startswith("pcm_"):
         raise RuntimeError(f"WAV 输出不是 PCM：{path}，编码：{codec}")
     return stream
+
+
+def mp3_timeline(frames, rate, channels):
+    # MPEG-1 Layer III at 320 kbps supports these rates and up to two channels.
+    mp3_rate = rate if rate in (32000, 44100, 48000) else 44100
+    return round(frames * mp3_rate / rate), mp3_rate, min(channels, 2)
+
+
+def encode_mp3(source, target, tools):
+    import soundfile as sf
+
+    info = sf.info(source)
+    frames, rate, channels = mp3_timeline(info.frames, info.samplerate, info.channels)
+    run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(source),
+              "-map", "0:a:0", "-ar", str(rate), "-ac", str(channels),
+              "-c:a", "libmp3lame", "-b:a", "320k", str(target)])
+    verify_output(target, "MP3", tools)
+    decoded = sf.info(target)
+    if ((decoded.samplerate, decoded.channels) != (rate, channels)
+            or abs(decoded.frames - frames) > (1 if info.samplerate != rate else 0)):
+        raise RuntimeError("MP3 解码后的时间轴或音频规格不一致。")
+    run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-xerror", "-i", str(target), "-f", "null", "-"])
 
 
 def song_title(original_name):
@@ -159,6 +181,8 @@ def named_stems(returned, folder, required):
 def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain_db=0,
                  instrumental_gain_db=0, gain_report=None, labels=("Vocals", "Instrumental")):
     """Encode and fully decode all tracks before the caller can publish/clean."""
+    if output_format != "MP3":
+        raise ValueError("仅支持 MP3（320 kbps）导出。")
     vocal_gain_db = validate_gain(vocal_gain_db)
     instrumental_gain_db = validate_gain(instrumental_gain_db)
     gain_report = gain_report if gain_report is not None else {}
@@ -168,8 +192,8 @@ def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain
         report = {"requested_db": gain_db}
         gain_report[label] = report
         source = stems[label]
-        original = verify_output(source, "WAV", tools)
-        target = result_dir / f"{title + '_' if title else ''}{label}.{output_format.lower()}"
+        verify_output(source, "WAV", tools)
+        target = result_dir / f"{title + '_' if title else ''}{label}.mp3"
         if target.exists():
             raise FileExistsError(f"结果已存在，拒绝覆盖：{target}")
         if gain_db > 0:
@@ -177,19 +201,7 @@ def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain
             processed = source.parent / (label + "_gain.wav")
             report.update(render_stem_gain(source, processed, gain_db, tools, run_tool))
             source = processed
-        if output_format == "MP3":
-            run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(source),
-                      "-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", "320k", str(target)])
-        elif gain_db > 0:
-            run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(source),
-                      "-map", "0:a:0", "-c:a", "pcm_s24le", str(target)])
-        else:
-            with target.open("xb") as destination, source.open("rb") as origin:
-                shutil.copyfileobj(origin, destination)
-        encoded = verify_output(target, output_format, tools)
-        if (encoded["sample_rate"], encoded["channels"]) != (original["sample_rate"], original["channels"]):
-            raise RuntimeError(f"导出采样率或声道与分离音轨不一致：{target}")
-        run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-xerror", "-i", str(target), "-f", "null", "-"])
+        encode_mp3(source, target, tools)
         if gain_db > 0:
             finish_gain_report(report, target)
         outputs.append(target)
@@ -212,8 +224,8 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         model_name = DEFAULT_MODEL
     arch = check_model(model_name)
     output_format = output_format.upper()
-    if output_format not in {"MP3", "WAV"}:
-        raise ValueError("输出格式只能为 MP3 或 WAV。")
+    if output_format != "MP3":
+        raise ValueError("仅支持 MP3（320 kbps）导出。")
     stage("正在检查音频文件")
     audio_path = validate_audio(audio_path)
     tools = configure_ffmpeg()
@@ -295,7 +307,6 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
     stems = _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, options, metrics)
     for path in stems.values():
         verify_output(path, "WAV", tools)
-    timeline = None
     if split_backing:
         from vocal_split import BVE_MODEL, VOCAL_LABELS, split_vocals
 
@@ -307,15 +318,14 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
         stems = {**{label: split[label] for label in VOCAL_LABELS}, **stems}
         metrics.update(vocal_model=BVE_MODEL, vocal_device=selected, vocal_seconds=time.perf_counter() - bve_start)
     required = tuple(stems)
-    if output_format == "WAV" and split_backing:
-        from mix_tracks import align_track, song_timeline
+    from mix_tracks import align_track, song_timeline
 
-        timeline = song_timeline(audio_path, work_dir, tools)
-        aligned = work_dir / "aligned"
-        aligned.mkdir()
-        for label in required:
-            stems[label] = align_track(stems[label], aligned / f"{label}.wav", timeline, tools)
-    stage("正在导出音频" + ("：MP3 320 kbps" if output_format == "MP3" else "：WAV PCM"))
+    timeline = mp3_timeline(*song_timeline(audio_path, work_dir, tools))
+    aligned = work_dir / "aligned"
+    aligned.mkdir()
+    for label in required:
+        stems[label] = align_track(stems[label], aligned / f"{label}.wav", timeline, tools)
+    stage("正在导出音频：MP3 320 kbps")
     export_start = time.perf_counter()
     result_dir = reserve_result_dir(output_dir, song_title(original_name or audio_path.name), max(required, key=len))
     staging = work_dir / "export"
@@ -336,7 +346,7 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
         if prepare_mix:
             from mix_tracks import save_mix
             stage("正在按原曲时间轴准备混音音轨")
-            save_mix(audio_path, dict(zip(required, outputs)), result_dir, work_dir, tools, timeline=timeline)
+            save_mix(dict(zip(required, outputs)), result_dir, timeline)
     except Exception:
         # Remove only our empty reservation; never touch history or recovery WAVs.
         if not any(result_dir.iterdir()):
@@ -356,7 +366,7 @@ def main():
     devices.add_argument("--cpu", action="store_true", help="强制使用 CPU")
     devices.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--model", choices=list(MODELS), default=DEFAULT_MODEL)
-    parser.add_argument("--format", choices=["MP3", "WAV"], default="MP3")
+    parser.add_argument("--format", choices=["MP3"], default="MP3")
     parser.add_argument("--performance", choices=["quality", "balanced", "fast"], default="balanced")
     parser.add_argument("--vocal-gain-db", type=validate_gain, default=0,
                         help="分离后人声增益，0～12 dB；正增益启用前瞻峰值保护")

@@ -1,4 +1,4 @@
-"""为混音器保存与原曲采样对齐的 WAV，以及可重新加载的时间轴。"""
+"""对齐临时音轨，并为已导出的 MP3 保存可重新加载的时间轴。"""
 import json
 import shutil
 from pathlib import Path
@@ -47,16 +47,14 @@ def align_track(source, target, timeline, tools):
     return target
 
 
-def save_mix(audio, stems, result_dir, work_dir, tools, timeline=None):
-    timeline = timeline or song_timeline(audio, work_dir, tools)
+def save_mix(stems, result_dir, timeline):
     frames, rate, _ = timeline
     mix = result_dir / "mix"
     mix.mkdir()
-    for label, source in stems.items():
-        align_track(source, mix / f"{label}.wav", timeline, tools)
-    # 轨道全部校验后才写清单，历史下拉列表只显示有完整清单的任务。
+    # 播放器直接复用导出的 MP3，时间轴只记录同目录内的文件名。
     pending = mix / "timeline.tmp"
-    pending.write_text(json.dumps({"frames": frames, "rate": rate, "tracks": list(stems)}), encoding="utf-8")
+    pending.write_text(json.dumps({"frames": frames, "rate": rate, "tracks": list(stems),
+                                   "format": "MP3"}), encoding="utf-8")
     pending.rename(mix / "timeline.json")
 
 
@@ -93,9 +91,13 @@ def read_mix(output_dir, name):
             or any(not isinstance(label, str) or label not in TRACK_LABELS for label in labels)
             or len(set(labels)) != len(labels) or frozenset(labels) not in MIX_TRACK_SETS):
         raise ValueError("混音时间轴或轨道清单无效。")
+    format_name = data.get("format", "WAV")
+    if format_name not in ("WAV", "MP3"):
+        raise ValueError("不支持此历史音轨格式。")
     tracks = {}
     for label in labels:
-        path = mix / f"{label}.wav"
+        # 旧清单仍使用既有试听文件，继续保留并支持历史混音。
+        path = mix / f"{label}.wav" if format_name == "WAV" else mix.parent / f"{name}_{label}.mp3"
         if not path.is_file() or path.is_symlink():
             raise ValueError(f"找不到混音音轨：{TRACK_LABELS[label]}")
         tracks[label] = path

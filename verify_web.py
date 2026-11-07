@@ -34,7 +34,7 @@ def main():
     assert not config.get("share", False)
     jobs = []
     # Submit both before waiting: the queue must isolate the tasks and the selected model/format.
-    for fixture, (model, fmt) in zip(fixtures, [(DEFAULT_MODEL, "WAV"), (DEFAULT_MODEL, "MP3")]):
+    for fixture, (model, fmt) in zip(fixtures, [(DEFAULT_MODEL, "MP3")] * len(fixtures)):
         job = client.submit(handle_file(str(fixture)), model, fmt, api_name="/separate")
         jobs.append((model, fmt, job))
     records = []

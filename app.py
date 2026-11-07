@@ -3,8 +3,9 @@ import logging
 import os
 import queue
 import threading
+import webbrowser
 
-from runtime_paths import DATA_DIR, OUTPUT_DIR, SOURCE_DIR
+from runtime_paths import DATA_DIR, OUTPUT_DIR, SOURCE_DIR, web_revision
 
 os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 os.environ.setdefault("GRADIO_TEMP_DIR", str(DATA_DIR / "cache" / "gradio"))
@@ -126,6 +127,7 @@ def export_mix(settings: dict) -> dict[str, str]:
 def create_app():
     with gr.Blocks(title="MusicVocalExtractor", analytics_enabled=False) as demo:
         gr.Markdown("# MusicVocalExtractor\n分离音乐并同步试听各音轨。所有音频处理均在本机完成。")
+        gr.Markdown(f"界面版本 `{web_revision()}`", elem_id="mve-web-revision")
         gr.Textbox(label="当前输出目录", value=str(OUTPUT_DIR), interactive=False)
         audio = UploadedAudio(label="选择音乐文件（MP3、WAV、FLAC、M4A）",
                         file_types=[".mp3", ".wav", ".flac", ".m4a"], type="filepath")
@@ -133,7 +135,8 @@ def create_app():
         mode = gr.Radio(label="分离模式", value="two",
                         choices=[("人声与伴奏", "two"), ("主唱与和声", "vocals")],
                         info="主唱与和声模式由 UVR-BVE-4B 进一步拆分人声。")
-        output_format = gr.Dropdown(label="输出音频格式", choices=[("MP3（320 kbps）", "MP3"), ("WAV（无损 PCM）", "WAV")], value="MP3")
+        output_format = gr.Dropdown(label="输出音频格式", choices=[("MP3（320 kbps）", "MP3")],
+                                    value="MP3", interactive=False)
         with gr.Row():
             with gr.Column():
                 gain_label = gr.Markdown("**人声增益：+0.0 dB**")
@@ -189,8 +192,18 @@ def create_app():
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    create_app().queue(max_size=8).launch(server_name="127.0.0.1", inbrowser=os.environ.get("MVE_NO_BROWSER") != "1", share=False,
-                                        allowed_paths=[str(OUTPUT_DIR)])
+    demo = create_app().queue(max_size=8)
+    try:
+        # launch 返回前已等待 Gradio 的启动事件成功。使用本进程实际选到的端口。
+        _, address, _ = demo.launch(server_name="127.0.0.1", inbrowser=False, share=False,
+                                    prevent_thread_lock=True, ssr_mode=False, allowed_paths=[str(OUTPUT_DIR)])
+        url = f"{address.rstrip('/')}/?mve={web_revision()}"
+        print(f"MusicVocalExtractor 已就绪 · {url}", flush=True)
+        if os.environ.get("MVE_NO_BROWSER") != "1":
+            webbrowser.open(url)
+        demo.block_thread()
+    finally:
+        demo.close()
 
 
 if __name__ == "__main__":

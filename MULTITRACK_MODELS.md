@@ -17,7 +17,7 @@ GitHub Star 为 2026-11-07 通过 GitHub REST API 查询的仓库 Star。表中�
 
 - `vocal_split.py` 复用 Audio Separator 0.48.0 的 VR 推理、官方列表、权重 SHA-256 和下载锁。第一次需要联网，之后复用现有 `models` 缓存。BVE 接收第一阶段的原始人声 WAV。
 - `separate.py` 与 `app.py` 接入一键流程。Kim MelBand RoFormer 完成后释放第一阶段显存，再运行 BVE。自动模式优先 CUDA，CUDA 初始化不可用时可提示并回退 CPU；显式 CUDA 保持报错。
-- `mix_tracks.py` 保存与原曲解码后采样数、采样率、声道数一致的 WAV 和时间轴。`mixer.html`、`mixer.css`、`mixer.js` 通过一个 Web Audio 时钟调度并使用独立的 GainNode。零音量直接静音，调整音量无需再次调用后端。
+- `mix_tracks.py` 保存同步时间轴，新任务的播放器直接读取同一批 MP3。`mixer.html`、`mixer.css`、`mixer.js` 通过一个 Web Audio 时钟调度并使用独立的 GainNode。零音量平滑过渡至静音。
 - 沿用 Windows 11 上的 Python 3.12.10、PyTorch 2.8.0+cu128、cuDNN 9.10.2、ONNX Runtime GPU 1.22.0、Gradio 6.31.0 与 FFmpeg。两阶段均走 PyTorch，无新增 Python 或浏览器依赖。
 
 ## 本机验收
@@ -44,14 +44,16 @@ GitHub Star 为 2026-11-07 通过 GitHub REST API 查询的仓库 Star。表中�
 | `app.py`、`separate.py`、`models.py` | 双轨与三轨入口，继续使用 Kim 与 BVE。移除额外乐器的界面选项与分离分支。 |
 | `mix_tracks.py` | 校验两类历史时间轴和试听规格。只有匹配这两类的历史结果显示在播放器中。 |
 | `mixer.html`、`mixer.css`、`mixer.js` | 共享播放时钟、独立静音、Solo、试听电平和混音导出界面。 |
-| `mix_export.py` | 从原时间轴分块叠加音频，导出 WAV 或 MP3，核验格式、长度及峰值。 |
-| `tests/test_mix_tracks.py`、`tests/test_mix_export.py` | 历史模式筛选、WAV 音量核对、MP3 时长、防削波和重复导出测试。 |
+| `mix_export.py` | 从原时间轴分块叠加音频，导出 320 kbps MP3，核验格式、长度及峰值。 |
+| `tests/test_mix_tracks.py`、`tests/test_mix_export.py` | 历史模式筛选、MP3 电平与时长、防削波和重复导出测试。 |
 | `instrument_split.py`、`tests/test_instrument_split.py` | 删除仅服务于额外乐器分离的实现与测试。 |
 | `README.md`、`THIRD_PARTY_NOTICES.md`、`MULTITRACK_MODELS.md` | 更新当前使用说明、模型许可与验收记录。 |
 
-实时试听和混音导出共用各轨音量、静音、Solo、总音量和固定防削波系数。系数由各轨峰值之和计算，保留至少 2 dB 的样本峰值余量，调整单轨时系数固定。试听与导出均有 5 ms 首尾淡入淡出，拖动滑块时用短增益过渡。WAV 为 24 位 PCM，MP3 有编码损失。混音导出按点击时的设置从歌曲开头渲染，文件保存在该歌曲的 `mix-exports/`。
+实时试听和混音导出共用各轨音量、静音、Solo、总音量和固定防削波系数。系数由各轨峰值之和计算，保留至少 2 dB 的样本峰值余量，调整单轨时系数固定。试听与导出均有 5 ms 首尾淡入淡出，试听拖动滑块时使用 40 ms 增益过渡。混音按点击时的设置从歌曲开头渲染，文件保存在该歌曲的 `mix-exports/`。
 
-### 整改后复验
+### 历史复验记录
+
+以下是切换为仅 MP3 之前的 Python 版测试。冻结版最新记录见 [EXE_MP3_VALIDATION.md](EXE_MP3_VALIDATION.md)。
 
 - Windows 11 上通过真实 Gradio 和 Edge 上传《Rainfall》8 秒片段进行双轨分离，上传 284.909 秒整曲进行三轨分离。Kim 和 BVE 的实际设备均为 RTX 5060 Laptop CUDA。三条整曲音轨的文件哈希各不相同，保持 12,564,480 帧、44.1 kHz、立体声。与参考轨比较，主唱和和声 SI-SDR 为 14.85 dB 和 4.60 dB，两条参考相关峰均位于零采样偏移。
 - 两种模式各只提交一次分离。验证共用 AudioContext、暂停继续、同步跳转和终点、滑块实时调节、独立静音恢复、Solo 及历史重载。两种模式均从网页下载 WAV 和 MP3，并重复导出 WAV。

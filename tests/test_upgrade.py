@@ -47,7 +47,7 @@ class UpgradeTests(unittest.TestCase):
             self.assertEqual(model.read_bytes(), b"preserve me")
             self.assertFalse(separator.downloaded)
 
-    def test_pcm_and_true_mp3_unicode_spaces_special_chars(self):
+    def test_mp3_unicode_spaces_special_chars(self):
         tools = configure_ffmpeg()
         with tempfile.TemporaryDirectory(prefix="中文 空格 & 音频 ") as temp:
             folder = Path(temp)
@@ -60,17 +60,18 @@ class UpgradeTests(unittest.TestCase):
                           f"sine=frequency={frequency}:duration=1", "-ar", "44100", "-ac", "2", str(path)])
                 stems[name] = path
             original_hashes = {k: hashlib.sha256(v.read_bytes()).hexdigest() for k, v in stems.items()}
-            for fmt in ("MP3", "WAV"):
-                result = folder / fmt
-                result.mkdir()
-                outputs = export_stems(stems, result, fmt, tools)
-                for output in outputs:
-                    stream = verify_output(output, fmt, tools)
-                    self.assertEqual(stream["channels"], 2)
-                    # Decode the whole result: a file header alone does not prove playability.
-                    run_tool([tools["ffmpeg"], "-v", "error", "-i", str(output), "-f", "null", "-"])
-                with self.assertRaises((RuntimeError, FileExistsError)):
-                    export_stems(stems, result, fmt, tools)
+            result = folder / "MP3"
+            result.mkdir()
+            outputs = export_stems(stems, result, "MP3", tools)
+            for output in outputs:
+                stream = verify_output(output, "MP3", tools)
+                self.assertEqual(stream["channels"], 2)
+                # Decode the whole result: a file header alone does not prove playability.
+                run_tool([tools["ffmpeg"], "-v", "error", "-i", str(output), "-f", "null", "-"])
+            with self.assertRaises((RuntimeError, FileExistsError)):
+                export_stems(stems, result, "MP3", tools)
+            with self.assertRaisesRegex(ValueError, "仅支持 MP3"):
+                export_stems(stems, result, "WAV", tools)
             self.assertEqual(original_hashes, {k: hashlib.sha256(v.read_bytes()).hexdigest() for k, v in stems.items()})
 
     def test_failed_mp3_keeps_wav(self):
@@ -78,7 +79,7 @@ class UpgradeTests(unittest.TestCase):
             folder = Path(folder)
             wave = folder / "source.wav"
             wave.write_bytes(b"this task's original PCM")
-            with patch("separate.verify_output"), patch("separate.run_tool", side_effect=RuntimeError("encoder failed")):
+            with patch("separate.verify_output"), patch("separate.encode_mp3", side_effect=RuntimeError("encoder failed")):
                 with self.assertRaises(RuntimeError):
                     export_stems({"Vocals": wave, "Instrumental": wave}, folder, "MP3", {"ffmpeg": "ffmpeg"})
             self.assertEqual(wave.read_bytes(), b"this task's original PCM")

@@ -8,7 +8,6 @@ const rows = find("[data-tracks]");
 const master = find("[data-master]");
 const masterValue = find("[data-master-value]");
 const exportButton = find("[data-export]");
-const exportFormat = find("[data-export-format]");
 const exportLink = find("[data-export-link]");
 const exportStatus = find("[data-export-status]");
 let context, masterGain, mix, request;
@@ -17,7 +16,10 @@ let sources = [];
 let offset = 0;
 let startedAt = 0;
 let animation = 0;
+let gainFrame = 0;
 let scrubbing = false;
+const gainEnvelopes = new WeakMap();
+const RAMP_SECONDS = 0.040;
 
 function position() {
   if (!sources.length) return offset;
@@ -57,6 +59,7 @@ function tick() {
 
 function startSources() {
   if (offset >= mix.duration) return;
+  applyGains(true);
   // 一批音源共享 AudioContext 的同一个开始时间和采样偏移。
   sources = tracks.map((track) => {
     const source = context.createBufferSource();
@@ -78,32 +81,48 @@ function effectiveVolumes() {
   ]));
 }
 
-function setGain(node, value) {
+function setGain(node, target, instant) {
   if (!node) return;
   const parameter = node.gain;
   const now = context.currentTime;
-  if (sources.length && typeof parameter.cancelAndHoldAtTime === "function") {
-    // 播放时在几毫秒内完成音量变化，减少瞬间跳变的声音。
-    parameter.cancelAndHoldAtTime(now);
-    parameter.linearRampToValueAtTime(value, now + 0.008);
-  } else {
-    parameter.cancelScheduledValues(now);
-    parameter.setValueAtTime(value, now);
+  const previous = gainEnvelopes.get(node);
+  if (previous?.target === target && (!instant || now >= previous.end)) return;
+  const end = now + (instant ? 0 : RAMP_SECONDS);
+  let start = target;
+  if (!instant) {
+    // 新滑块事件从上一段包络的当前位置接续，快速拖动也不会从旧目标跳变。
+    const fraction = previous && now < previous.end
+      ? Math.max(0, (now - previous.time) / (previous.end - previous.time)) : 1;
+    start = previous ? previous.start + (previous.target - previous.start) * fraction : parameter.value;
   }
+  // 显式锁住当前增益，避免部分浏览器取消旧斜坡时重用过时的自动化事件。
+  parameter.cancelScheduledValues(now);
+  parameter.setValueAtTime(start, now);
+  if (!instant) parameter.linearRampToValueAtTime(target, end);
+  gainEnvelopes.set(node, { start, target, time: now, end });
+}
+
+function applyGains(instant) {
+  cancelAnimationFrame(gainFrame);
+  gainFrame = 0;
+  if (!mix) return;
+  const levels = effectiveVolumes();
+  for (const track of tracks) setGain(track.gain, levels[track.id] / 100, instant);
+  setGain(masterGain, Number(master.value) / 100 * mix.headroom, instant);
 }
 
 function applyVolumes() {
   const levels = effectiveVolumes();
   for (const track of tracks) {
-    setGain(track.gain, levels[track.id] / 100);
     track.row.classList.toggle("mve-quiet", levels[track.id] === 0);
     track.value.textContent = track.slider.value + "%";
     track.muteButton.textContent = track.muted ? "恢复" : "静音";
     track.muteButton.setAttribute("aria-pressed", String(track.muted));
     track.soloButton.setAttribute("aria-pressed", String(track.solo));
   }
-  if (mix) setGain(masterGain, Number(master.value) / 100 * mix.headroom);
   masterValue.textContent = master.value + "%";
+  if (!sources.length) applyGains(true);
+  else if (!gainFrame) gainFrame = requestAnimationFrame(() => applyGains(!sources.length));
 }
 
 function fadeBufferEdges(buffer, seconds) {
@@ -241,20 +260,19 @@ play.addEventListener("click", async () => {
 exportButton.addEventListener("click", async () => {
   if (!mix) return;
   const currentMix = mix;
-  const format = exportFormat.value;
   exportButton.disabled = true;
   exportLink.hidden = true;
   exportStatus.textContent = "正在导出整首歌曲…";
   try {
-    // 在点击时快照化设置。导出从已保存的 WAV 混合，播放进度与后续拖动互不影响。
+    // 在点击时快照化设置，导出不受试听过渡、进度和后续拖动影响。
     const result = await server.export_mix({
-      name: currentMix.title, format, levels: effectiveVolumes(), master: Number(master.value)
+      name: currentMix.title, format: "MP3", levels: effectiveVolumes(), master: Number(master.value)
     });
     if (mix !== currentMix) return;
     if (!result?.url) throw new Error(result?.error || "无法连接本机混音服务。");
     exportLink.href = result.url;
     exportLink.download = result.name;
-    exportLink.textContent = "下载 " + format;
+    exportLink.textContent = "下载 MP3";
     exportLink.hidden = false;
     exportStatus.textContent = "已保存到歌曲目录的 mix-exports";
   } catch (error) {

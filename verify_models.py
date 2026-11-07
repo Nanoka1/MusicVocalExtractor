@@ -26,7 +26,7 @@ def main():
     if not mp3.exists():
         run_tool([tools["ffmpeg"], "-v", "error", "-n", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "320k", str(mp3)])
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (wav, mp3)}
-    cases = [(model, source, fmt) for model in MODELS for source, fmt in ((wav, "WAV"), (mp3, "MP3"))]
+    cases = [(model, source, fmt) for model in MODELS for source, fmt in ((wav, "MP3"), (mp3, "MP3"))]
     report = []
     for model, source, fmt in cases:
         start = time.perf_counter()

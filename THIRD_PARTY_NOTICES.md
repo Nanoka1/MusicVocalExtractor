@@ -11,6 +11,7 @@
 | Demucs | MIT 代码；Copyright Meta Platforms, Inc. and affiliates；https://github.com/facebookresearch/demucs |
 | PyTorch / torchvision | BSD 类许可证；https://github.com/pytorch/pytorch 、https://github.com/pytorch/vision |
 | librosa | ISC；https://github.com/librosa/librosa |
+| python-samplerate / libsamplerate | [MIT Python 接口](https://github.com/tuxu/python-samplerate)与 [BSD-2-Clause 原生库](https://github.com/libsndfile/libsamplerate/blob/master/COPYING)，由 BVE 的重采样使用 |
 | ONNX Runtime | MIT；https://github.com/microsoft/onnxruntime |
 | Gradio | Apache-2.0；https://github.com/gradio-app/gradio |
 | PyInstaller | GPL 并附带引导程序分发例外；https://pyinstaller.org/en/stable/license.html |

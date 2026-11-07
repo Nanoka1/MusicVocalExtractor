@@ -47,7 +47,7 @@ RoFormer 分段按作者 8 秒推荐值设置 segment_size=801（441 hop），�
 
 ## 构建及共享缓存
 
-当前构建默认使用 CPU，只有显式 `-Gpu` 才使用 `.venv-gpu` 并要求真实 CUDA 预检；不会为普通 CPU 构建探测异常 GPU。不重装依赖，不清空 dist。GPU 使用固定 `dist/candidate-gpu/MusicVocalExtractor/` 和 `build/gpu/`，已有候选则停止而不叠加时间戳目录。
+默认构建使用 CPU。显式 `-Gpu` 使用现有 `.venv-gpu` 并进行 CUDA 预检。每个构建 ID 使用单独的候选和工作目录。
 
 候选的本地 `runtime-config.json` 指向项目现有数据/模型目录，跨版本复用校验过的缓存，不复制或移动权重；不再使用 `-IncludeCachedModels`。分发到其他位置/电脑前应调整该本地路径配置，不能随意删除原缓存。现有旧 EXE 的目录与数据不受影响。
 
@@ -56,13 +56,12 @@ GPU 恢复后运行：
 ```powershell
 .\.venv-gpu\Scripts\python.exe verify_gpu.py
 .\.venv-gpu\Scripts\python.exe benchmark_gpu.py
-.\build_exe.ps1 -Gpu
-.\.venv-gpu\Scripts\python.exe verify_release.py --package dist/candidate-gpu/MusicVocalExtractor
-.\.venv-gpu\Scripts\python.exe publish_release.py
-# 上一条预览通过后才执行：
-.\.venv-gpu\Scripts\python.exe publish_release.py --publish
+$buildId = 'gpu-release-01'
+.\build_exe.ps1 -Gpu -BuildId $buildId
+.\.venv-gpu\Scripts\python.exe verify_release.py --package "dist/candidate-gpu-$buildId/MusicVocalExtractor"
+.\.venv-gpu\Scripts\python.exe publish_release.py --build-id $buildId --publish
 ```
 
-冻结程序提供 `--gpu-check` 和 `--verify-gpu-models`，分别实测 CUDA 矩阵运算和三个模型的 GPU 证据。发布验证还启动真实 EXE 网页、使用 CUDA 平衡模式分离并检查下载/试听一致性，生成文件 SHA-256 清单。发布仅将通过验收且未被修改的候选移动到新的 `dist/MusicVocalExtractor-GPU/`，不覆盖旧正式目录；已有 GPU 正式版时停止，需先审查回退方案，不自动删除任何历史。
+冻结程序提供 `--gpu-check` 和 `--verify-gpu-models`。发布验证还启动真实 EXE 网页，核对资源指纹、CUDA 分离、试听及 MP3 混音导出。通过验收后可更新 `dist/MusicVocalExtractor/`，旧正式版完整移至 `.reference/formal-before-<ID>/`。
 
-**新的 GPU EXE 仍未验收，不宣称 GPU 性能测试完成。** 用户后续已调整优先级，明确授权在数据完整迁移、进程检查及保留可用 CPU 正式版的条件下清理三个指定旧构建；这项授权不扩展到其他构建或数据目录。当前处理记录见 [OUTPUT_PATHS.md](OUTPUT_PATHS.md)。
+早期构建与迁移记录见 [OUTPUT_PATHS.md](OUTPUT_PATHS.md)。

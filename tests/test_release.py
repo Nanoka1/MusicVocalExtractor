@@ -61,7 +61,8 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             report = dict(passed=True, gpu=False, cpu=True, http_preview_download=True,
-                          models_shared=True, manifest=package_manifest(root))
+                          models_shared=True, manifest=package_manifest(root),
+                          web_revision=runtime_paths.web_revision(), mp3_mix=True)
             (root / "release-validation.json").write_text(json.dumps(report))
             with self.assertRaisesRegex(RuntimeError, "没有通过"):
                 validate_candidate(root)
@@ -73,11 +74,21 @@ class ReleaseTests(unittest.TestCase):
             app = root / "example.txt"
             app.write_text("synthetic package fixture")
             report = dict(passed=True, gpu=True, http_preview_download=True, models_shared=True,
-                          manifest=package_manifest(root))
+                          manifest=package_manifest(root), web_revision=runtime_paths.web_revision(), mp3_mix=True)
             (root / "release-validation.json").write_text(json.dumps(report))
             self.assertTrue(validate_candidate(root)["passed"])
             app.write_text("modified after verification")
             with self.assertRaisesRegex(RuntimeError, "实测清单不同"):
+                validate_candidate(root)
+
+    def test_old_web_version_cannot_be_published(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "release-validation.json").write_text(json.dumps(dict(
+                passed=True, gpu=True, http_preview_download=True, models_shared=True,
+                web_revision="old", mp3_mix=True, manifest=package_manifest(root),
+            )))
+            with self.assertRaisesRegex(RuntimeError, "当前网页版本"):
                 validate_candidate(root)
 
     def test_unverified_release_rejected(self):

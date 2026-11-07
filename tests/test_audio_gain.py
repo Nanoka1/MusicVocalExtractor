@@ -50,69 +50,62 @@ class GainTests(unittest.TestCase):
             root = Path(temp)
             stems = self.make_stems(root)
             hashes = {key: hashlib.sha256(path.read_bytes()).hexdigest() for key, path in stems.items()}
-            for fmt in ("WAV", "MP3"):
-                baseline = root / fmt
-                baseline.mkdir()
-                original = export_stems(stems, baseline, fmt, self.tools)
-                if fmt == "WAV":
-                    for label, path in zip(stems, original):
-                        self.assertEqual(path.read_bytes(), stems[label].read_bytes())
-                # Each active stem has a fresh work directory, as in real tasks.
-                for vocal_db, inst_db in ((3, 0), (6, 0), (12, 0), (0, 3), (0, 6), (0, 12), (6, 12)):
-                    with self.subTest(format=fmt, vocals=vocal_db, instrumental=inst_db):
-                        case = root / f"{fmt}_{vocal_db}_{inst_db}"
-                        case.mkdir()
-                        current = self.make_stems(case)
-                        # FLOAT WAV headers can contain a creation timestamp. Compare
-                        # exports of identical files, not two separately written fixtures.
-                        for label in current:
-                            current[label].write_bytes(stems[label].read_bytes())
-                        report = {}
-                        outputs = export_stems(current, case, fmt, self.tools,
-                                               vocal_gain_db=vocal_db, instrumental_gain_db=inst_db,
-                                               gain_report=report)
-                        for index, (label, gain_db) in enumerate((("Vocals", vocal_db), ("Instrumental", inst_db))):
-                            if gain_db == 0:
-                                self.assertEqual(outputs[index].read_bytes(), original[index].read_bytes())
-                            else:
-                                data, rate = sf.read(outputs[index], always_2d=True)
-                                before, _ = sf.read(original[index], always_2d=True)
-                                # Ignore boundary resampler transients and MP3 end padding.
-                                measured = np.sqrt(np.mean(data[2000:-2000] ** 2) / np.mean(before[2000:-2000] ** 2))
-                                self.assertAlmostEqual(measured, 10 ** (gain_db / 20), delta=.005)
-                                self.assertEqual(rate, 44100)
-                                self.assertEqual(data.shape, before.shape)
-                                if fmt == "WAV":
-                                    np.testing.assert_allclose(data[2000:-2000],
-                                                               before[2000:-2000] * 10 ** (gain_db / 20),
-                                                               atol=2e-6, rtol=0)
-                                self.assertLess(audio_peak(outputs[index])["peak"], 1)
-                                self.assertLess(report[label]["peak_shortfall_db"], .05)
-                        self.assertEqual(len(list(case.glob("*." + fmt.lower()))), 2)
+            fmt = "MP3"
+            baseline = root / fmt
+            baseline.mkdir()
+            original = export_stems(stems, baseline, fmt, self.tools)
+            # Each active stem has a fresh work directory, as in real tasks.
+            for vocal_db, inst_db in ((3, 0), (6, 0), (12, 0), (0, 3), (0, 6), (0, 12), (6, 12)):
+                with self.subTest(format=fmt, vocals=vocal_db, instrumental=inst_db):
+                    case = root / f"{fmt}_{vocal_db}_{inst_db}"
+                    case.mkdir()
+                    current = self.make_stems(case)
+                    # FLOAT WAV headers can contain a creation timestamp. Compare
+                    # exports of identical files, not two separately written fixtures.
+                    for label in current:
+                        current[label].write_bytes(stems[label].read_bytes())
+                    report = {}
+                    outputs = export_stems(current, case, fmt, self.tools,
+                                           vocal_gain_db=vocal_db, instrumental_gain_db=inst_db,
+                                           gain_report=report)
+                    for index, (label, gain_db) in enumerate((("Vocals", vocal_db), ("Instrumental", inst_db))):
+                        if gain_db == 0:
+                            self.assertEqual(outputs[index].read_bytes(), original[index].read_bytes())
+                        else:
+                            data, rate = sf.read(outputs[index], always_2d=True)
+                            before, _ = sf.read(original[index], always_2d=True)
+                            # Ignore boundary resampler transients and MP3 end padding.
+                            measured = np.sqrt(np.mean(data[2000:-2000] ** 2) / np.mean(before[2000:-2000] ** 2))
+                            self.assertAlmostEqual(measured, 10 ** (gain_db / 20), delta=.005)
+                            self.assertEqual(rate, 44100)
+                            self.assertEqual(data.shape, before.shape)
+                            self.assertLess(audio_peak(outputs[index])["peak"], 1)
+                            self.assertLess(report[label]["peak_shortfall_db"], .05)
+                    self.assertEqual(len(list(case.glob("*." + fmt.lower()))), 2)
             self.assertEqual(hashes, {key: hashlib.sha256(path.read_bytes()).hexdigest() for key, path in stems.items()})
 
     def test_hot_signal_limited_without_flat_clipping_and_stereo_shift(self):
         for rate, channels in ((44100, 2), (48000, 1)):
-            for fmt in ("WAV", "MP3"):
-                with self.subTest(rate=rate, channels=channels, format=fmt), tempfile.TemporaryDirectory() as temp:
-                    root = Path(temp)
-                    stems = self.make_stems(root, amplitude=.8, rate=rate, channels=channels)
-                    report = {}
-                    outputs = export_stems(stems, root, fmt, self.tools, vocal_gain_db=12,
-                                           instrumental_gain_db=12, gain_report=report)
-                    for label, path in zip(stems, outputs):
-                        data, actual_rate = sf.read(path, always_2d=True)
-                        self.assertEqual(actual_rate, rate)
-                        self.assertEqual(data.shape, (rate, channels))
-                        self.assertTrue(np.isfinite(data).all())
-                        self.assertLess(np.max(np.abs(data)), 1)
-                        self.assertGreater(np.max(np.abs(data)), .7)
-                        self.assertGreater(report[label]["peak_shortfall_db"], 9)
-                        self.assertIn("+12.0 dB", format_gain_report(report[label]))
-                        # Limiter follows peaks instead of flattening each clipped sample.
-                        self.assertLess(np.mean(np.abs(np.diff(data[2000:-2000, 0])) < 1e-7), .01)
-                        if channels == 2:
-                            np.testing.assert_allclose(data[2000:-2000, 1], data[2000:-2000, 0] * .7, atol=.0003)
+            fmt = "MP3"
+            with self.subTest(rate=rate, channels=channels, format=fmt), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                stems = self.make_stems(root, amplitude=.8, rate=rate, channels=channels)
+                report = {}
+                outputs = export_stems(stems, root, fmt, self.tools, vocal_gain_db=12,
+                                       instrumental_gain_db=12, gain_report=report)
+                for label, path in zip(stems, outputs):
+                    data, actual_rate = sf.read(path, always_2d=True)
+                    self.assertEqual(actual_rate, rate)
+                    self.assertEqual(data.shape, (rate, channels))
+                    self.assertTrue(np.isfinite(data).all())
+                    self.assertLess(np.max(np.abs(data)), 1)
+                    self.assertGreater(np.max(np.abs(data)), .7)
+                    self.assertGreater(report[label]["peak_shortfall_db"], 9)
+                    self.assertIn("+12.0 dB", format_gain_report(report[label]))
+                    # Limiter follows peaks instead of flattening each clipped sample.
+                    self.assertLess(np.mean(np.abs(np.diff(data[2000:-2000, 0])) < 1e-7), .01)
+                    if channels == 2:
+                        np.testing.assert_allclose(data[2000:-2000, 1], data[2000:-2000, 0] * .7, atol=.0003)
 
     def test_silence_and_invalid_samples(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -149,7 +142,7 @@ class GainTests(unittest.TestCase):
 
             with patch("separate.run_tool", side_effect=overshooting_filter):
                 with self.assertRaisesRegex(RuntimeError, "整数 PCM 削波"):
-                    export_stems(stems, root, "WAV", self.tools, vocal_gain_db=12)
+                    export_stems(stems, root, "MP3", self.tools, vocal_gain_db=12)
             self.assertFalse((root / "Vocals.wav").exists())
             self.assertTrue(stems["Vocals"].is_file())
             self.assertTrue((stems["Vocals"].parent / "Vocals_gain.wav").is_file())
