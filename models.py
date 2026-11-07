@@ -7,8 +7,7 @@ MODELS = {
 }
 MODEL_CHOICES = [(f"{label} — {filename}", filename) for filename, (label, _) in MODELS.items()]
 TRACK_LABELS = {"Vocals": "人声", "Instrumental": "伴奏",
-                "LeadVocals": "主唱", "BackingVocals": "背景和声",
-                "Drums": "鼓", "Bass": "贝斯", "Other": "其他乐器"}
+                "LeadVocals": "主唱", "BackingVocals": "背景和声"}
 
 
 def check_model(model):

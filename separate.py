@@ -1,7 +1,6 @@
 """Audio Separator wrapper: verified models, named stems and PCM/MP3 export."""
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -200,7 +199,7 @@ def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain
 def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFAULT_MODEL,
                    output_format="MP3", progress_callback=None, original_name=None, device="auto",
                    performance_mode="balanced", metrics_callback=None, vocal_gain_db=0,
-                   instrumental_gain_db=0, prepare_mix=False, split_backing=False, split_instruments=False):
+                   instrumental_gain_db=0, prepare_mix=False, split_backing=False):
     total_start = time.perf_counter()
     vocal_gain_db = validate_gain(vocal_gain_db)
     instrumental_gain_db = validate_gain(instrumental_gain_db)
@@ -226,14 +225,10 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         from audio_separator.separator import Separator
     except ImportError as error:
         raise RuntimeError(f"AI 依赖未能导入：{error}。请检查项目虚拟环境。") from error
-    prepare_mix = prepare_mix or split_backing or split_instruments
+    prepare_mix = prepare_mix or split_backing
     selected = select_device(device, cpu, allow_cpu_fallback=prepare_mix)
     info = device_info(selected)
-    model_for_job = model_name
-    if split_instruments:
-        from instrument_split import SCNET_MODEL
-        model_for_job = SCNET_MODEL
-    stats = dict(info, mode=performance_mode, oom_retries=0, model=model_for_job, requested_model=requested_model)
+    stats = dict(info, mode=performance_mode, oom_retries=0, model=model_name, requested_model=requested_model)
     options = inference_options(model_name, performance_mode, selected, info.get("free_bytes"))
     stats["options"] = options
     if selected == "cuda":
@@ -241,7 +236,7 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     stage(f"推理设备：{info['name']}（{selected.upper()}）；PyTorch {info['torch']}")
     if prepare_mix and selected == "cpu" and device == "auto" and not cpu:
         stage("自动模式选择 CPU；CUDA 不可用或启动配置指定了 CPU。")
-    if not split_instruments and selected == "cuda" and arch == "MDX":
+    if selected == "cuda" and arch == "MDX":
         preload_onnx_cuda()
     output_dir = Path(output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -253,8 +248,7 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
                                  output_format, tools, stage, original_name, selected == "cpu", torch,
                                  options=options, metrics=stats, vocal_gain_db=vocal_gain_db,
                                  instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix,
-                                 split_backing=split_backing, split_instruments=split_instruments,
-                                 auto_fallback=device == "auto" and os.environ.get("MVE_DEVICE", "auto") == "auto")
+                                 split_backing=split_backing)
         stats["total_seconds"] = time.perf_counter() - total_start
         if selected == "cuda":
             stats["peak_bytes"] = torch.cuda.max_memory_allocated()
@@ -295,17 +289,10 @@ def _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, 
 
 def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
                    output_format, tools, stage, original_name, cpu, torch, options=None, metrics=None,
-                   vocal_gain_db=0, instrumental_gain_db=0, prepare_mix=False, split_backing=False,
-                   split_instruments=False, auto_fallback=False):
+                   vocal_gain_db=0, instrumental_gain_db=0, prepare_mix=False, split_backing=False):
     metrics = metrics if metrics is not None else {}
     selected = "cpu" if cpu else "cuda"
-    if split_instruments:
-        from instrument_split import separate_instruments
-        stems = separate_instruments(audio_path, work_dir, MODEL_DIR, tools, selected,
-                                     metrics["mode"], stage, metrics, auto_fallback)
-        stems = {"Vocals": stems["Vocals"], **{label: path for label, path in stems.items() if label != "Vocals"}}
-    else:
-        stems = _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, options, metrics)
+    stems = _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, options, metrics)
     for path in stems.values():
         verify_output(path, "WAV", tools)
     timeline = None
@@ -320,7 +307,7 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
         stems = {**{label: split[label] for label in VOCAL_LABELS}, **stems}
         metrics.update(vocal_model=BVE_MODEL, vocal_device=selected, vocal_seconds=time.perf_counter() - bve_start)
     required = tuple(stems)
-    if output_format == "WAV" and (split_backing or split_instruments):
+    if output_format == "WAV" and split_backing:
         from mix_tracks import align_track, song_timeline
 
         timeline = song_timeline(audio_path, work_dir, tools)

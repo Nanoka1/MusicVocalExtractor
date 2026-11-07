@@ -4,14 +4,13 @@
 
 一个在自己电脑上使用的 **AI 音乐分离和混音工具**。
 
-上传一首歌，选择「人声与伴奏」「主唱与和声」或「主唱、和声与乐器」，点击「开始分离」。生成的音轨可以一起试听，也可以单独下载。
+上传一首歌，选择「人声与伴奏」或「主唱与和声」，点击「开始分离」。生成的音轨可以一起试听，也可以单独下载。
 
 ## 能做什么？
 
 - **分开人声和伴奏**：支持导入 MP3、WAV、FLAC、M4A。
 - **选择保存格式**：默认导出 MP3（320 kbps），也可以选择 WAV。
 - **提取主唱与背景和声**：Kim MelBand RoFormer 先分离人声，UVR-BVE-4B v1 再从人声中提取主唱与背景和声。模型首次使用时自动下载并校验，之后复用缓存。
-- **分开鼓和贝斯**：五轨模式用 SCNet 先分出人声、鼓、贝斯和其他乐器，再用 BVE 拆分人声。SCNet 通过 ONNX Runtime 使用 CUDA，BVE 使用 PyTorch CUDA。
 - **查看处理状态**：告诉你当前正在检查文件、下载模型、分离还是导出。
 - **多轨混音**：一起播放、暂停或跳转。每条音轨可独立调音量，拉到 0% 即静音，再向右拖动即可恢复。支持总音量、Solo、恢复默认、开启全部和静音全部。
 - **下载和重新载入**：本次音轨可单独下载。以后可以从「已保存的混音」载入结果，直接试听。
@@ -40,7 +39,7 @@
 
 首次使用模型由 Audio Separator 官方机制下载并校验 SHA-256，之后复用缓存。自动设备模式优先用 CUDA，初始化不可用时会在分离状态中提示并使用 CPU。显式选择 CUDA 时，设备不可用会报错。
 
-分离前设置的**导出增益**为 0～+12 dB。主唱和背景和声沿用人声设置，各乐器沿用伴奏设置。正增益启用峰值保护。混音器的 0～100% 滑块即时调整浏览器试听音量。导出增益处理详见 [AUDIO_GAIN.md](AUDIO_GAIN.md)。
+分离前设置的**导出增益**为 0～+12 dB。主唱和背景和声沿用人声设置。正增益启用峰值保护。混音器的 0～100% 滑块即时调整浏览器试听音量。导出增益处理详见 [AUDIO_GAIN.md](AUDIO_GAIN.md)。
 
 CLI 示例（两个参数均可省略，默认 0 dB）：
 
@@ -48,11 +47,11 @@ CLI 示例（两个参数均可省略，默认 0 dB）：
 .\.venv-gpu\Scripts\python.exe separate.py "音乐.mp3" --vocal-gain-db 6 --instrumental-gain-db 3
 ```
 
-Python API 和 Gradio `/separate` 保留两轨输出及原有导出增益参数。Python 调用可通过 `split_backing=True` 请求主唱、和声与伴奏，同时传入 `split_instruments=True` 可获得五轨。网页的「开始分离」使用独立的 `/mix` 入口并保存混音时间轴。
+Python API 和 Gradio `/separate` 保留两轨输出及原有导出增益参数。Python 调用可通过 `split_backing=True` 请求主唱、和声与伴奏。网页的「开始分离」使用独立的 `/mix` 入口并保存混音时间轴。
 
 当前可选及默认模型为 **MelBand RoFormer · Kim**（`vocals_mel_band_roformer.ckpt`），复用已下载的约 913 MB 权重；Windows CPU 与 RTX 5060 CUDA 加载/推理已验证。按用户明确选择停用 Voc FT（`UVR-MDX-NET-Voc_FT.onnx`）和 Inst HQ 3（`UVR-MDX-NET-Inst_HQ_3.onnx`），不再提供这两个选项或下载它们。此前移除的 Karaoke 2、htdemucs 不恢复；其他模型权重和通用 MDX/ONNX 推理依赖不受影响。尚未完成真实歌曲音质 AB 验证，不将默认设置等同于音质排名。参数和旧配置处理见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)，候选研究见 [MODEL_RESEARCH.md](MODEL_RESEARCH.md)，此前升级记录见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)。
 
-MP3 通过 FFmpeg `libmp3lame -b:a 320k` 编码，每轨都会核验格式并完整解码。网页另保存与原曲解码时间轴一致的 `mix/*.wav` 和 `mix/timeline.json`，便于同步播放及重新载入，因此会占用额外磁盘空间。三轨和五轨模式选择 WAV 时，下载文件也保持原曲的采样率、声道数和样本数。失败时恢复 WAV 和已编码音轨保留在错误提示所列的 `cache/separation/work_*/`。
+MP3 通过 FFmpeg `libmp3lame -b:a 320k` 编码，每轨都会核验格式并完整解码。网页另保存与原曲解码时间轴一致的 `mix/*.wav` 和 `mix/timeline.json`，便于同步播放及重新载入，因此会占用额外磁盘空间。三轨模式选择 WAV 时，下载文件也保持原曲的采样率、声道数和样本数。失败时恢复 WAV 和已编码音轨保留在错误提示所列的 `cache/separation/work_*/`。
 
 Python 版模型和输出位于项目 `models/`、`outputs/歌曲名/`。Gradio 在预处理上传元信息时保留 `FileData.orig_name`，不将缓存路径名误当歌曲名；CLI 使用输入路径文件名。名称清理 Windows 非法字符及保留设备名，按 UTF-16 路径预算截短；通过原子 mkdir 分配同名的 `歌曲名 (2)`、`歌曲名 (3)`，支持并发，不覆盖历史。EXE 版默认位于 EXE 旁的相应目录；目录不可写时使用 `%LOCALAPPDATA%/MusicVocalExtractor/`。可通过 `MVE_DATA_DIR` 指定数据根目录；原有 `AUDIO_SEPARATOR_MODEL_DIR` 模型路径配置继续有效。
 

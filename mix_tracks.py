@@ -7,6 +7,11 @@ from urllib.parse import quote
 from models import TRACK_LABELS
 from separate import run_tool
 
+MIX_TRACK_SETS = (
+    frozenset(("Vocals", "Instrumental")),
+    frozenset(("LeadVocals", "BackingVocals", "Instrumental")),
+)
+
 
 def song_timeline(audio, work_dir, tools):
     import soundfile as sf
@@ -56,14 +61,21 @@ def saved_mixes(output_dir):
     root = Path(output_dir)
     if not root.is_dir():
         return []
-    return sorted((folder.name for folder in root.iterdir()
-                   if folder.is_dir() and not folder.is_symlink()
-                   and (folder / "mix" / "timeline.json").is_file()), reverse=True)
+    names = []
+    for folder in root.iterdir():
+        if not folder.is_dir():
+            continue
+        try:
+            read_mix(root, folder.name)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        names.append(folder.name)
+    return sorted(names, reverse=True)
 
 
-def mix_manifest(output_dir, name):
+def read_mix(output_dir, name):
     root = Path(output_dir).resolve()
-    if not name or name in {".", ".."} or "/" in name or "\\" in name:
+    if not isinstance(name, str) or not name or name in {".", ".."} or any(c in name for c in "/\\:"):
         raise ValueError("请选择一个已保存的混音结果。")
     mix = root / name / "mix"
     if mix.resolve() != mix:
@@ -76,13 +88,22 @@ def mix_manifest(output_dir, name):
     if (type(frames) is not int or frames <= 0 or type(rate) is not int or rate <= 0
             or not isinstance(labels, list) or not labels
             or any(not isinstance(label, str) or label not in TRACK_LABELS for label in labels)
-            or len(set(labels)) != len(labels)):
+            or len(set(labels)) != len(labels) or frozenset(labels) not in MIX_TRACK_SETS):
         raise ValueError("混音时间轴或轨道清单无效。")
-    tracks = []
+    tracks = {}
     for label in labels:
         path = mix / f"{label}.wav"
         if not path.is_file() or path.is_symlink():
             raise ValueError(f"找不到混音音轨：{TRACK_LABELS[label]}")
-        url = "gradio_api/file=" + quote(path.as_posix(), safe="/:")
-        tracks.append({"id": label, "label": TRACK_LABELS[label], "url": url})
+        tracks[label] = path
+    return frames, rate, tracks
+
+
+def file_url(path):
+    return "gradio_api/file=" + quote(path.as_posix(), safe="/:")
+
+
+def mix_manifest(output_dir, name):
+    frames, rate, paths = read_mix(output_dir, name)
+    tracks = [{"id": label, "label": TRACK_LABELS[label], "url": file_url(path)} for label, path in paths.items()]
     return json.dumps({"title": name, "duration": frames / rate, "tracks": tracks}, ensure_ascii=False)

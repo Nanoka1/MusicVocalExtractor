@@ -30,6 +30,17 @@ class MixTrackTests(unittest.TestCase):
             save_mix(audio, {"Vocals": short, "Instrumental": long}, result, root, configure_ffmpeg())
 
             self.assertEqual(saved_mixes(root), [name])
+            # 旧乐器分离任务留在磁盘，当前播放器只打开两种人声模式。
+            retired = root / "old" / "mix"
+            retired.mkdir(parents=True)
+            (retired / "timeline.json").write_text(json.dumps({
+                "frames": 4800, "rate": 48000,
+                "tracks": ["LeadVocals", "BackingVocals", "Drums", "Bass", "Other"],
+            }), encoding="utf-8")
+            self.assertEqual(saved_mixes(root), [name])
+            with self.assertRaises(ValueError):
+                mix_manifest(root, "old")
+            self.assertTrue((retired / "timeline.json").is_file())
             manifest = json.loads(mix_manifest(root, name))
             self.assertEqual((manifest["title"], manifest["duration"]), (name, 0.1))
             self.assertEqual([track["id"] for track in manifest["tracks"]], ["Vocals", "Instrumental"])
