@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 
-from models import DEFAULT_MODEL, ROFORMER_MODEL
+from models import MODELS
 from runtime_paths import PROJECT_DIR, configure_ffmpeg
 from separate import probe_audio, run_tool, separate_audio, verify_output
 
@@ -26,8 +26,7 @@ def main():
     if not mp3.exists():
         run_tool([tools["ffmpeg"], "-v", "error", "-n", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "320k", str(mp3)])
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (wav, mp3)}
-    cases = [(DEFAULT_MODEL, wav, "WAV"), (DEFAULT_MODEL, mp3, "MP3"),
-             ("UVR-MDX-NET-Inst_HQ_3.onnx", wav, "WAV"), (ROFORMER_MODEL, mp3, "MP3")]
+    cases = [(model, source, fmt) for model in MODELS for source, fmt in ((wav, "WAV"), (mp3, "MP3"))]
     report = []
     for model, source, fmt in cases:
         start = time.perf_counter()

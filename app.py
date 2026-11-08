@@ -15,6 +15,7 @@ from models import DEFAULT_MODEL, MODEL_CHOICES
 from separate import separate_audio
 from gpu_runtime import hardware_status
 from performance import MODE_CHOICES, MODES, format_metrics
+from audio_gain import format_gain_report
 
 
 class UploadedAudio(gr.File):
@@ -29,7 +30,7 @@ class UploadedAudio(gr.File):
 
 
 def extract_vocals(audio_path, model_name=DEFAULT_MODEL, output_format="MP3", performance_mode="balanced",
-                   device="auto", progress=gr.Progress()):
+                   device="auto", vocal_gain_db=0, instrumental_gain_db=0, progress=gr.Progress()):
     if not audio_path:
         yield None, None, "请先选择一个音乐文件。", None, None
         return
@@ -40,7 +41,9 @@ def extract_vocals(audio_path, model_name=DEFAULT_MODEL, output_format="MP3", pe
             stats = {}
             result = separate_audio(audio_path, OUTPUT_DIR, model_name=model_name, output_format=output_format,
                                     original_name=getattr(audio_path, "original_name", None),
-                                    performance_mode=performance_mode, device=device, metrics_callback=stats.update,
+                                    performance_mode=performance_mode, device=device, vocal_gain_db=vocal_gain_db,
+                                    instrumental_gain_db=instrumental_gain_db,
+                                    metrics_callback=stats.update,
                                     progress_callback=lambda message: events.put(("stage", message)))
             events.put(("done", (result, stats)))
         except Exception as error:
@@ -62,7 +65,10 @@ def extract_vocals(audio_path, model_name=DEFAULT_MODEL, output_format="MP3", pe
             vocals, instrumental = map(str, paths)
             yield vocals, instrumental, (f"分离完成！\n歌曲：{paths[0].parent.name}\n"
                                         f"人声：{paths[0].name}\n伴奏：{paths[1].name}\n"
-                                        f"保存位置：{paths[0].parent}\n模型：{model_name}\n{format_metrics(stats)}"), vocals, instrumental
+                                        f"保存位置：{paths[0].parent}\n模型：{stats.get('model', model_name)}\n"
+                                        f"{format_gain_report(stats.get('stem_gains', {}).get('Vocals', {}), '人声')}\n"
+                                        f"{format_gain_report(stats.get('stem_gains', {}).get('Instrumental', {}), '伴奏')}\n"
+                                        f"{format_metrics(stats)}"), vocals, instrumental
             return
 
 
@@ -74,6 +80,18 @@ def create_app():
                         file_types=[".mp3", ".wav", ".flac", ".m4a"], type="filepath")
         model = gr.Dropdown(label="选择 AI 分离模型", choices=MODEL_CHOICES, value=DEFAULT_MODEL)
         output_format = gr.Dropdown(label="输出音频格式", choices=[("MP3（320 kbps）", "MP3"), ("WAV（无损 PCM）", "WAV")], value="MP3")
+        with gr.Row():
+            with gr.Column():
+                gain_label = gr.Markdown("**人声增益：+0.0 dB**")
+                gain = gr.Slider(minimum=0, maximum=12, value=0, step=0.1, label="人声增益（dB）")
+            with gr.Column():
+                instrumental_gain_label = gr.Markdown("**伴奏增益：+0.0 dB**")
+                instrumental_gain = gr.Slider(minimum=0, maximum=12, value=0, step=0.1, label="伴奏增益（dB）")
+        gain.change(lambda value: f"**人声增益：+{value:.1f} dB**", inputs=gain, outputs=gain_label,
+                    queue=False, api_name=False)
+        instrumental_gain.change(lambda value: f"**伴奏增益：+{value:.1f} dB**", inputs=instrumental_gain,
+                                 outputs=instrumental_gain_label, queue=False, api_name=False)
+        gr.Markdown("两条音轨独立调整，均为 0～+12 dB。0 dB 保持原输出；正增益启用峰值保护，结果显示实际峰值。请在分离前设置，修改后需重新开始分离。")
         performance = gr.Dropdown(label="AI 分离性能模式", choices=MODE_CHOICES, value="balanced")
         device = gr.Dropdown(label="推理设备", choices=[("自动检测", "auto"), ("CUDA GPU（不可用时报错）", "cuda"), ("CPU", "cpu")], value=os.environ.get("MVE_DEVICE", "auto"))
         hardware = gr.Textbox(label="GPU 加速状态", value=hardware_status(), interactive=False)
@@ -91,7 +109,7 @@ def create_app():
             vocals = gr.File(label="人声 Vocals · 点击下载", interactive=False)
             instrumental = gr.File(label="伴奏 Instrumental · 点击下载", interactive=False)
         gr.Markdown(f"结果保存到 **{OUTPUT_DIR}**，每次任务使用独立目录。首次使用模型需要联网下载。处理期间请保持启动窗口打开。")
-        start.click(extract_vocals, inputs=[audio, model, output_format, performance, device],
+        start.click(extract_vocals, inputs=[audio, model, output_format, performance, device, gain, instrumental_gain],
                     outputs=[vocals, instrumental, status, vocals_player, instrumental_player],
                     concurrency_limit=1, concurrency_id="separation", api_name="separate")
     return demo

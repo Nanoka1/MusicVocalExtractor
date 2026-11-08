@@ -23,6 +23,9 @@ class InterfaceTests(unittest.TestCase):
         config = create_app().get_config_file()
         from app import OUTPUT_DIR
         self.assertTrue(any(c["props"].get("label") == "当前输出目录" and c["props"].get("value") == str(OUTPUT_DIR) for c in config["components"]))
+        for label in ("人声增益（dB）", "伴奏增益（dB）"):
+            slider = next(c["props"] for c in config["components"] if c["props"].get("label") == label)
+            self.assertEqual((slider["minimum"], slider["maximum"], slider["value"]), (0, 12, 0))
 
     def test_no_file_clears_results(self):
         from app import extract_vocals
@@ -83,7 +86,7 @@ class InterfaceIntegrationTests(unittest.TestCase):
                     upload = {"path": response.json()[0], "orig_name": "周杰伦 - 晴天.mp3",
                               "meta": {"_type": "gradio.FileData"}}
                     requested = "cuda" if torch.cuda.is_available() else "cpu"
-                    response = httpx.post(api + "/call/separate", json={"data": [upload, ROFORMER_MODEL, "MP3", "balanced", requested]})
+                    response = httpx.post(api + "/call/separate", json={"data": [upload, ROFORMER_MODEL, "MP3", "balanced", requested, 6, 12]})
                     response.raise_for_status()
                     files = None
                     event = None
@@ -96,6 +99,8 @@ class InterfaceIntegrationTests(unittest.TestCase):
                                 files = json.loads(line[6:])
                     self.assertIsNotNone(files)
                     self.assertIn("分离完成", files[2])
+                    self.assertIn("人声增益：+6.0 dB", files[2])
+                    self.assertIn("伴奏增益：+12.0 dB", files[2])
                     for download, preview, label in zip(files[:2], files[3:], ("Vocals", "Instrumental")):
                         self.assertEqual(download["orig_name"], f"周杰伦 - 晴天_{label}.mp3")
                         downloaded = httpx.get(download["url"])

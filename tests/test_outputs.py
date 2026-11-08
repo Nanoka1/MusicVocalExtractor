@@ -15,8 +15,9 @@ from separate import (_separate_task, probe_audio, reserve_result_dir, run_tool,
 class OutputTests(unittest.TestCase):
     def test_model_list_and_default(self):
         self.assertIn(DEFAULT_MODEL, MODELS)
-        self.assertIn("UVR-MDX-NET-Voc_FT.onnx", MODELS)
-        self.assertIn("UVR-MDX-NET-Inst_HQ_3.onnx", MODELS)
+        self.assertNotIn("UVR-MDX-NET-Voc_FT.onnx", MODELS)
+        self.assertNotIn("UVR-MDX-NET-Inst_HQ_3.onnx", MODELS)
+        self.assertEqual(DEFAULT_MODEL, "vocals_mel_band_roformer.ckpt")
         self.assertNotIn("UVR_MDXNET_KARA_2.onnx", MODELS)
         self.assertNotIn("htdemucs.yaml", MODELS)
 
@@ -64,7 +65,7 @@ class OutputTests(unittest.TestCase):
                     with self.subTest(input=ext, output=fmt):
                         work = root / (ext + fmt)
                         work.mkdir()
-                        with patch("separate.prepare_model"), patch("separate.validate_loaded_device"):
+                        with patch("separate.prepare_model"), patch("separate.validate_loaded_device"), patch("performance.observe_forward", return_value=[]):
                             outputs = _separate_task(Engine, audio, results, work, DEFAULT_MODEL, fmt,
                                                      tools, lambda _: None, "周杰伦 - 晴天.mp3", True, torch)
                         self.assertFalse(work.exists())
@@ -85,7 +86,7 @@ class OutputTests(unittest.TestCase):
                     raise RuntimeError("second encoder failed")
                 return real_tool(command)
 
-            with patch("separate.prepare_model"), patch("separate.validate_loaded_device"), patch("separate.run_tool", side_effect=fail_second_encoder):
+            with patch("separate.prepare_model"), patch("separate.validate_loaded_device"), patch("performance.observe_forward", return_value=[]), patch("separate.run_tool", side_effect=fail_second_encoder):
                 with self.assertRaisesRegex(RuntimeError, "second encoder failed"):
                     _separate_task(Engine, source, results, work, DEFAULT_MODEL, "MP3",
                                    tools, stages.append, "failed.wav", True, torch)

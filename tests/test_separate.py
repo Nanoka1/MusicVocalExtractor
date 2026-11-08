@@ -52,8 +52,11 @@ class ModelTests(unittest.TestCase):
             # 生成两秒非静音信号，不需要下载或提交歌曲。
             sample_rate = 44100
             time = np.arange(sample_rate * 2) / sample_rate
-            signal = 0.2 * np.sin(2 * np.pi * 220 * time)
-            stereo = np.column_stack((signal, signal * 0.8))
+            # A single 220 Hz tone can correctly become silent in RoFormer's
+            # vocal stem. Use the modulated lead/backing fixture from verify_models.
+            lead = .15 * np.sin(2 * np.pi * (220 * time + 45 * np.sin(time * 3)))
+            backing = .12 * np.sin(2 * np.pi * 110 * time)
+            stereo = np.column_stack((lead + backing, lead * .8 + backing))
             source = folder / "source.wav"
             sf.write(source, stereo, sample_rate)
             result_folders = set()

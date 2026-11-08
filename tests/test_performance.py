@@ -16,7 +16,7 @@ class PerformanceTests(unittest.TestCase):
         low = inference_options(ROFORMER_MODEL, "balanced", "cuda", 2 * 1024**3)
         self.assertLess(low["mdxc_params"]["segment_size"], settings[1]["mdxc_params"]["segment_size"])
         self.assertFalse(inference_options(ROFORMER_MODEL, "fast", "cpu")["use_autocast"])
-        self.assertNotIn("mdxc_params", inference_options("UVR-MDX-NET-Voc_FT.onnx", "balanced", "cuda"))
+        self.assertNotIn("mdxc_params", inference_options("example_mdx.onnx", "balanced", "cuda"))
         with self.assertRaises(ValueError):
             inference_options(ROFORMER_MODEL, "unknown", "cuda")
 

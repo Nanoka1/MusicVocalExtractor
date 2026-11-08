@@ -12,6 +12,33 @@ from verify_release import package_manifest
 
 
 class ReleaseTests(unittest.TestCase):
+    def test_named_backup_preserves_previous_release_and_rejects_reuse(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            formal = root / "dist/MusicVocalExtractor"
+            candidate = root / "dist/candidate-gpu/MusicVocalExtractor"
+            formal.mkdir(parents=True)
+            candidate.mkdir(parents=True)
+            (formal / "old.txt").write_text("old GPU version")
+            (candidate / "new.txt").write_text("new GPU version")
+            args = ["publish_release", "--publish", "--backup-name", "formal-before-audio-gain"]
+            with patch.object(publish_release, "__file__", str(root / "publish_release.py")), patch.object(sys, "argv", args), patch.object(publish_release, "validate_candidate"), patch.object(publish_release, "assert_not_running"):
+                publish_release.main()
+                candidate.mkdir()
+                (candidate / "next.txt").write_text("next candidate")
+                with self.assertRaisesRegex(RuntimeError, "已存在"):
+                    publish_release.main()
+            self.assertEqual((root / ".reference/formal-before-audio-gain/old.txt").read_text(), "old GPU version")
+            self.assertTrue((formal / "new.txt").is_file())
+            self.assertTrue((candidate / "next.txt").is_file())
+
+    def test_named_backup_rejects_path_traversal(self):
+        for name in ("../escape", "C:\\escape", "a/b", "..", "x" * 65):
+            with self.subTest(name=name), patch.object(sys, "argv", ["publish_release", "--backup-name", name]):
+                with self.assertRaises(SystemExit) as error:
+                    publish_release.main()
+                self.assertEqual(error.exception.code, 2)
+
     def test_gpu_publish_updates_formal_and_keeps_cpu_fallback(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
