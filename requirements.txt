@@ -1,0 +1,6 @@
+# CPU 基础版；NVIDIA 版请使用 requirements-gpu.txt，不要同时安装两份。
+torch==2.8.0
+torchvision==0.23.0
+# Audio Separator 使用 audioread，保留仍提供该依赖的 librosa 版本。
+librosa==0.11.0
+audio-separator[cpu]==0.48.0
