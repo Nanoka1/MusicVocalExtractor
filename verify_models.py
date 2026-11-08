@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 
-from models import DEFAULT_MODEL
+from models import DEFAULT_MODEL, ROFORMER_MODEL
 from runtime_paths import PROJECT_DIR, configure_ffmpeg
 from separate import probe_audio, run_tool, separate_audio, verify_output
 
@@ -27,8 +27,7 @@ def main():
         run_tool([tools["ffmpeg"], "-v", "error", "-n", "-i", str(wav), "-c:a", "libmp3lame", "-b:a", "320k", str(mp3)])
     before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (wav, mp3)}
     cases = [(DEFAULT_MODEL, wav, "WAV"), (DEFAULT_MODEL, mp3, "MP3"),
-             ("UVR-MDX-NET-Voc_FT.onnx", mp3, "MP3"),
-             ("UVR-MDX-NET-Inst_HQ_3.onnx", wav, "WAV"), ("htdemucs.yaml", wav, "MP3")]
+             ("UVR-MDX-NET-Inst_HQ_3.onnx", wav, "WAV"), (ROFORMER_MODEL, mp3, "MP3")]
     report = []
     for model, source, fmt in cases:
         start = time.perf_counter()
@@ -43,6 +42,7 @@ def main():
                 data, rate = sf.read(output)
                 assert np.isfinite(data).all()
                 assert abs(len(data) / rate - 3) < 0.15
+            assert set(outputs[0].parent.iterdir()) == set(outputs), "temporary files leaked into results"
             a, _ = sf.read(outputs[0])
             b, _ = sf.read(outputs[1])
             assert not np.array_equal(a, b), "stems are identical"

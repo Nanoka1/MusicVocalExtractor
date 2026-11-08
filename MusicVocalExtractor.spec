@@ -4,7 +4,8 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 root = Path(SPECPATH)
-datas = []
+# Gradio's component metaclass reads UploadedAudio's defining source at import.
+datas = [(str(root / "app.py"), ".")]
 for package in ("audio_separator", "gradio", "gradio_client", "huggingface_hub", "librosa", "numba", "safehttpx", "groovy", "hf_gradio"):
     # librosa and numba inspect source files for lazy loading/JIT cache locations.
     datas += collect_data_files(package, include_py_files=package in ("gradio", "gradio_client", "librosa", "numba"))
@@ -16,11 +17,11 @@ for distribution in ("audio-separator", "gradio", "gradio-client", "torch", "onn
 
 hiddenimports = [
     "audio_separator.separator.architectures.mdx_separator",
-    "audio_separator.separator.architectures.demucs_separator",
+    "audio_separator.separator.architectures.mdxc_separator",
     "uvicorn.logging", "uvicorn.loops.auto", "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets.auto", "uvicorn.lifespan.on",
 ]
-for package in ("audio_separator.separator.uvr_lib_v5", "gradio", "gradio_client", "librosa", "onnxruntime", "diffq"):
+for package in ("audio_separator.separator.uvr_lib_v5", "audio_separator.separator.roformer", "gradio", "gradio_client", "librosa", "onnxruntime", "diffq"):
     hiddenimports += collect_submodules(package)
 
 binaries = []

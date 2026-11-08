@@ -4,3 +4,4 @@ torchvision==0.23.0
 librosa==0.11.0
 onnxruntime-gpu==1.22.0
 audio-separator[gpu]==0.48.0
+# RoFormer 使用 PyTorch CUDA；两个 MDX-Net 使用 ONNX Runtime CUDA。版本保持不变。

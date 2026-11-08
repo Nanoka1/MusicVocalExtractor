@@ -29,8 +29,9 @@ try {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'LICENSE') -Destination $package
     # Model redistribution rights are separate. Copy caches only for an explicit personal build.
     if ($IncludeCachedModels) {
-    $cacheNames = @('UVR_MDXNET_KARA_2.onnx', 'UVR-MDX-NET-Voc_FT.onnx',
-                    'UVR-MDX-NET-Inst_HQ_3.onnx', 'htdemucs.yaml', '955717e8-8726e21a.th',
+    $cacheNames = @('UVR-MDX-NET-Voc_FT.onnx',
+                    'UVR-MDX-NET-Inst_HQ_3.onnx',
+                    'vocals_mel_band_roformer.ckpt', 'vocals_mel_band_roformer.yaml',
                     'download_checks.json', 'mdx_model_data.json', 'vr_model_data.json')
     $modelTarget = Join-Path $package 'models'
     New-Item -ItemType Directory -Force -Path $modelTarget | Out-Null

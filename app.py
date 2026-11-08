@@ -15,6 +15,17 @@ from models import DEFAULT_MODEL, MODEL_CHOICES
 from separate import separate_audio
 
 
+class UploadedAudio(gr.File):
+    """Preserve FileData.orig_name before Gradio converts it to NamedString."""
+    is_template = True  # Reuse Gradio's built-in File frontend, including frozen builds.
+
+    def preprocess(self, payload):
+        path = super().preprocess(payload)
+        if path is not None:
+            path.original_name = payload.orig_name or os.path.basename(path)
+        return path
+
+
 def extract_vocals(audio_path, model_name=DEFAULT_MODEL, output_format="MP3", progress=gr.Progress()):
     if not audio_path:
         yield None, None, "请先选择一个音乐文件。", None, None
@@ -24,6 +35,7 @@ def extract_vocals(audio_path, model_name=DEFAULT_MODEL, output_format="MP3", pr
     def worker():
         try:
             result = separate_audio(audio_path, OUTPUT_DIR, model_name=model_name, output_format=output_format,
+                                    original_name=getattr(audio_path, "original_name", None),
                                     progress_callback=lambda message: events.put(("stage", message)))
             events.put(("done", result))
         except Exception as error:
@@ -49,7 +61,7 @@ def extract_vocals(audio_path, model_name=DEFAULT_MODEL, output_format="MP3", pr
 def create_app():
     with gr.Blocks(title="MusicVocalExtractor", analytics_enabled=False) as demo:
         gr.Markdown("# MusicVocalExtractor\n选择音乐，提取人声和伴奏。所有音频处理均在本机完成。")
-        audio = gr.File(label="选择音乐文件（MP3、WAV、FLAC、M4A）",
+        audio = UploadedAudio(label="选择音乐文件（MP3、WAV、FLAC、M4A）",
                         file_types=[".mp3", ".wav", ".flac", ".m4a"], type="filepath")
         model = gr.Dropdown(label="选择 AI 分离模型", choices=MODEL_CHOICES, value=DEFAULT_MODEL)
         output_format = gr.Dropdown(label="输出音频格式", choices=[("MP3（320 kbps）", "MP3"), ("WAV（无损 PCM）", "WAV")], value="MP3")

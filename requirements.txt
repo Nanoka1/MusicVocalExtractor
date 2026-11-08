@@ -4,3 +4,4 @@ torchvision==0.23.0
 # Audio Separator 使用 audioread，保留仍提供该依赖的 librosa 版本。
 librosa==0.11.0
 audio-separator[cpu]==0.48.0
+# 0.48.0 已包含 Kim MelBand RoFormer 的 MDXC 推理与下载，无需第二套引擎。
