@@ -1,6 +1,7 @@
 # NVIDIA 版；PyTorch CUDA 版的安装顺序见 README.md。
-torch==2.8.0
-torchvision==0.23.0
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.8.0+cu128
+torchvision==0.23.0+cu128
 librosa==0.11.0
 onnxruntime-gpu==1.22.0
 audio-separator[gpu]==0.48.0

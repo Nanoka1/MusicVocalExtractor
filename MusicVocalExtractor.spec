@@ -4,6 +4,18 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 root = Path(SPECPATH)
+if os.environ.get("MVE_BUILD_FLAVOR") == "GPU":
+    import torch
+    from importlib.metadata import version, PackageNotFoundError
+    if torch.version.cuda is None:
+        raise RuntimeError("GPU build cannot use CPU-only PyTorch")
+    version("onnxruntime-gpu")
+    try:
+        version("onnxruntime")
+    except PackageNotFoundError:
+        pass
+    else:
+        raise RuntimeError("Do not mix CPU and GPU ONNX Runtime")
 # Gradio's component metaclass reads UploadedAudio's defining source at import.
 datas = [(str(root / "app.py"), ".")]
 for package in ("audio_separator", "gradio", "gradio_client", "huggingface_hub", "librosa", "numba", "safehttpx", "groovy", "hf_gradio"):

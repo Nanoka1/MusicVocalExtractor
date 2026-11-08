@@ -64,7 +64,7 @@ class OutputTests(unittest.TestCase):
                     with self.subTest(input=ext, output=fmt):
                         work = root / (ext + fmt)
                         work.mkdir()
-                        with patch("separate.prepare_model"):
+                        with patch("separate.prepare_model"), patch("separate.validate_loaded_device"):
                             outputs = _separate_task(Engine, audio, results, work, DEFAULT_MODEL, fmt,
                                                      tools, lambda _: None, "周杰伦 - 晴天.mp3", True, torch)
                         self.assertFalse(work.exists())
@@ -85,7 +85,7 @@ class OutputTests(unittest.TestCase):
                     raise RuntimeError("second encoder failed")
                 return real_tool(command)
 
-            with patch("separate.prepare_model"), patch("separate.run_tool", side_effect=fail_second_encoder):
+            with patch("separate.prepare_model"), patch("separate.validate_loaded_device"), patch("separate.run_tool", side_effect=fail_second_encoder):
                 with self.assertRaisesRegex(RuntimeError, "second encoder failed"):
                     _separate_task(Engine, source, results, work, DEFAULT_MODEL, "MP3",
                                    tools, stages.append, "failed.wav", True, torch)

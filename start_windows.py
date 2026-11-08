@@ -1,6 +1,7 @@
 """Windows 双击启动助手：首次安装到虚拟环境，以后直接启动界面。"""
 
 import shutil
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -28,7 +29,8 @@ def main():
             print("安装完成后，重新打开项目文件夹并双击 start.bat。")
             return 1
 
-    python = PROJECT_DIR / ".venv" / "Scripts" / "python.exe"
+    gpu_python = PROJECT_DIR / ".venv-gpu" / "Scripts" / "python.exe"
+    python = gpu_python if gpu_python.is_file() and os.environ.get("MVE_DEVICE") != "cpu" else PROJECT_DIR / ".venv" / "Scripts" / "python.exe"
     if not python.is_file():
         if (PROJECT_DIR / ".venv").exists():
             print("现有 .venv 不能用于 Windows。请先将其重命名备份，再重新启动。")

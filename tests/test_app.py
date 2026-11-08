@@ -20,7 +20,9 @@ class InterfaceTests(unittest.TestCase):
             value = upload.preprocess(FileData(path=str(path), orig_name="原始 中文 & 歌曲.mp3"))
             self.assertEqual(str(value), str(path))
             self.assertEqual(value.original_name, "原始 中文 & 歌曲.mp3")
-        self.assertIsNotNone(create_app().get_config_file())
+        config = create_app().get_config_file()
+        from app import OUTPUT_DIR
+        self.assertTrue(any(c["props"].get("label") == "当前输出目录" and c["props"].get("value") == str(OUTPUT_DIR) for c in config["components"]))
 
     def test_no_file_clears_results(self):
         from app import extract_vocals
@@ -80,7 +82,8 @@ class InterfaceIntegrationTests(unittest.TestCase):
                     response.raise_for_status()
                     upload = {"path": response.json()[0], "orig_name": "周杰伦 - 晴天.mp3",
                               "meta": {"_type": "gradio.FileData"}}
-                    response = httpx.post(api + "/call/separate", json={"data": [upload, ROFORMER_MODEL, "MP3"]})
+                    requested = "cuda" if torch.cuda.is_available() else "cpu"
+                    response = httpx.post(api + "/call/separate", json={"data": [upload, ROFORMER_MODEL, "MP3", "balanced", requested]})
                     response.raise_for_status()
                     files = None
                     event = None
