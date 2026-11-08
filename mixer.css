@@ -1,0 +1,35 @@
+.mve-mixer {
+  padding: 1rem;
+  border: 1px solid var(--border-color-primary);
+  border-radius: 0.75rem;
+}
+.mve-mixer h2 { margin: 0 0 0.5rem; }
+.mve-mixer [data-message] { min-height: 1.5em; overflow-wrap: anywhere; }
+.mve-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin: 0.5rem 0; }
+.mve-seek { flex: 1; min-width: 8rem; display: flex; align-items: center; gap: 0.5rem; }
+.mve-seek input { flex: 1; min-width: 0; }
+.mve-track {
+  display: grid;
+  grid-template-columns: minmax(5em, 1fr) minmax(3em, 3fr) 4ch auto;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 3rem;
+  border-top: 1px solid var(--border-color-primary);
+}
+.mve-track input { width: 100%; min-width: 0; }
+.mve-track-buttons { display: flex; gap: 0.4rem; }
+.mve-track-buttons button { min-width: 4.5em; white-space: nowrap; }
+.mve-export { border-top: 1px solid var(--border-color-primary); padding-top: 0.6rem; }
+.mve-export a { color: var(--link-text-color); text-decoration: underline; }
+.mve-mixer input[type="range"] { accent-color: var(--color-accent); }
+.mve-track.mve-quiet { opacity: 0.6; }
+.mve-track output, .mve-controls [data-time] { font-variant-numeric: tabular-nums; }
+.mve-mixer button {
+  padding: 0.3rem 0.65rem;
+  color: var(--body-text-color);
+  background: var(--background-fill-secondary);
+  border: 1px solid var(--border-color-primary);
+  border-radius: 0.45rem;
+}
+.mve-mixer button[aria-pressed="true"] { border-color: var(--color-accent); font-weight: bold; }
+.mve-mixer button:disabled { opacity: 0.6; }

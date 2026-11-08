@@ -1,4 +1,4 @@
-"""Audio Separator wrapper: verified models, named stems and PCM/MP3 export."""
+"""Audio Separator wrapper: verified models, named stems and MP3 export."""
 import argparse
 import json
 import re
@@ -9,7 +9,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from models import DEFAULT_MODEL, MODELS, ROFORMER_MODEL, REMOVED_MODELS, check_model
+from models import DEFAULT_MODEL, MODELS, ROFORMER_MODEL, REMOVED_MODELS, TRACK_LABELS, check_model
 from runtime_paths import DATA_DIR, MODEL_DIR, OUTPUT_DIR, configure_ffmpeg
 from gpu_runtime import device_info, preload_onnx_cuda, select_device, validate_loaded_device
 from performance import inference_options, infer_with_retry
@@ -59,6 +59,28 @@ def verify_output(path, output_format, tools):
     return stream
 
 
+def mp3_timeline(frames, rate, channels):
+    # MPEG-1 Layer III at 320 kbps supports these rates and up to two channels.
+    mp3_rate = rate if rate in (32000, 44100, 48000) else 44100
+    return round(frames * mp3_rate / rate), mp3_rate, min(channels, 2)
+
+
+def encode_mp3(source, target, tools):
+    import soundfile as sf
+
+    info = sf.info(source)
+    frames, rate, channels = mp3_timeline(info.frames, info.samplerate, info.channels)
+    run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(source),
+              "-map", "0:a:0", "-ar", str(rate), "-ac", str(channels),
+              "-c:a", "libmp3lame", "-b:a", "320k", str(target)])
+    verify_output(target, "MP3", tools)
+    decoded = sf.info(target)
+    if ((decoded.samplerate, decoded.channels) != (rate, channels)
+            or abs(decoded.frames - frames) > (1 if info.samplerate != rate else 0)):
+        raise RuntimeError("MP3 解码后的时间轴或音频规格不一致。")
+    run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-xerror", "-i", str(target), "-f", "null", "-"])
+
+
 def song_title(original_name):
     """Treat upload metadata as a filename, never as a filesystem path."""
     leaf = str(original_name).replace("\\", "/").rsplit("/", 1)[-1]
@@ -71,13 +93,13 @@ def song_title(original_name):
     return title
 
 
-def reserve_result_dir(output_dir, title):
+def reserve_result_dir(output_dir, title, longest_label="Instrumental"):
     """Atomic mkdir handles concurrent jobs; budget in Windows UTF-16 units."""
     units = lambda text: len(str(text).encode("utf-16-le")) // 2
     for index in range(1, 100000):
         suffix = "" if index == 1 else f" ({index})"
-        # Full longest path: parent / title / title_Instrumental.mp3.
-        budget = (240 - units(output_dir) - 2 - units("_Instrumental.mp3")) // 2 - units(suffix)
+        # Full longest path: parent / title / title_<longest_label>.mp3.
+        budget = (240 - units(output_dir) - 2 - units(f"_{longest_label}.mp3")) // 2 - units(suffix)
         if budget < 1:
             raise ValueError("输出根目录路径过长，请选择更短的输出路径。")
         base = title.encode("utf-16-le")[:budget * 2].decode("utf-16-le", errors="ignore").rstrip(" .") or "_"
@@ -92,9 +114,9 @@ def reserve_result_dir(output_dir, title):
     raise RuntimeError("同名结果过多，请选择其他输出目录。")
 
 
-def prepare_model(separator, model, stage, metrics=None):
+def prepare_model(separator, model, stage, metrics=None, *, arch=None):
     """Public APIs, official downloads and SHA-256; preserve existing corrupt files too."""
-    arch = check_model(model)  # Reject retired IDs before network/cache/engine access.
+    arch = arch or check_model(model)  # The legacy entry points still enforce their model whitelist.
     from filelock import FileLock, Timeout
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
     try:
@@ -157,18 +179,21 @@ def named_stems(returned, folder, required):
 
 
 def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain_db=0,
-                 instrumental_gain_db=0, gain_report=None):
-    """Encode and fully decode both tracks before the caller can publish/clean."""
-    gains = {"Vocals": validate_gain(vocal_gain_db), "Instrumental": validate_gain(instrumental_gain_db)}
+                 instrumental_gain_db=0, gain_report=None, labels=("Vocals", "Instrumental")):
+    """Encode and fully decode all tracks before the caller can publish/clean."""
+    if output_format != "MP3":
+        raise ValueError("仅支持 MP3（320 kbps）导出。")
+    vocal_gain_db = validate_gain(vocal_gain_db)
+    instrumental_gain_db = validate_gain(instrumental_gain_db)
     gain_report = gain_report if gain_report is not None else {}
     outputs = []
-    for label in ("Vocals", "Instrumental"):
-        gain_db = gains[label]
+    for label in labels:
+        gain_db = vocal_gain_db if label in {"Vocals", "LeadVocals", "BackingVocals"} else instrumental_gain_db
         report = {"requested_db": gain_db}
         gain_report[label] = report
         source = stems[label]
-        original = verify_output(source, "WAV", tools)
-        target = result_dir / f"{title + '_' if title else ''}{label}.{output_format.lower()}"
+        verify_output(source, "WAV", tools)
+        target = result_dir / f"{title + '_' if title else ''}{label}.mp3"
         if target.exists():
             raise FileExistsError(f"结果已存在，拒绝覆盖：{target}")
         if gain_db > 0:
@@ -176,19 +201,7 @@ def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain
             processed = source.parent / (label + "_gain.wav")
             report.update(render_stem_gain(source, processed, gain_db, tools, run_tool))
             source = processed
-        if output_format == "MP3":
-            run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(source),
-                      "-map", "0:a:0", "-c:a", "libmp3lame", "-b:a", "320k", str(target)])
-        elif gain_db > 0:
-            run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-n", "-i", str(source),
-                      "-map", "0:a:0", "-c:a", "pcm_s24le", str(target)])
-        else:
-            with target.open("xb") as destination, source.open("rb") as origin:
-                shutil.copyfileobj(origin, destination)
-        encoded = verify_output(target, output_format, tools)
-        if (encoded["sample_rate"], encoded["channels"]) != (original["sample_rate"], original["channels"]):
-            raise RuntimeError(f"导出采样率或声道与分离音轨不一致：{target}")
-        run_tool([tools["ffmpeg"], "-nostdin", "-v", "error", "-xerror", "-i", str(target), "-f", "null", "-"])
+        encode_mp3(source, target, tools)
         if gain_db > 0:
             finish_gain_report(report, target)
         outputs.append(target)
@@ -198,7 +211,7 @@ def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain
 def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFAULT_MODEL,
                    output_format="MP3", progress_callback=None, original_name=None, device="auto",
                    performance_mode="balanced", metrics_callback=None, vocal_gain_db=0,
-                   instrumental_gain_db=0):
+                   instrumental_gain_db=0, prepare_mix=False, split_backing=False):
     total_start = time.perf_counter()
     vocal_gain_db = validate_gain(vocal_gain_db)
     instrumental_gain_db = validate_gain(instrumental_gain_db)
@@ -211,8 +224,8 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         model_name = DEFAULT_MODEL
     arch = check_model(model_name)
     output_format = output_format.upper()
-    if output_format not in {"MP3", "WAV"}:
-        raise ValueError("输出格式只能为 MP3 或 WAV。")
+    if output_format != "MP3":
+        raise ValueError("仅支持 MP3（320 kbps）导出。")
     stage("正在检查音频文件")
     audio_path = validate_audio(audio_path)
     tools = configure_ffmpeg()
@@ -224,7 +237,8 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         from audio_separator.separator import Separator
     except ImportError as error:
         raise RuntimeError(f"AI 依赖未能导入：{error}。请检查项目虚拟环境。") from error
-    selected = select_device(device, cpu)
+    prepare_mix = prepare_mix or split_backing
+    selected = select_device(device, cpu, allow_cpu_fallback=prepare_mix)
     info = device_info(selected)
     stats = dict(info, mode=performance_mode, oom_retries=0, model=model_name, requested_model=requested_model)
     options = inference_options(model_name, performance_mode, selected, info.get("free_bytes"))
@@ -232,6 +246,8 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     if selected == "cuda":
         torch.cuda.reset_peak_memory_stats()
     stage(f"推理设备：{info['name']}（{selected.upper()}）；PyTorch {info['torch']}")
+    if prepare_mix and selected == "cpu" and device == "auto" and not cpu:
+        stage("自动模式选择 CPU；CUDA 不可用或启动配置指定了 CPU。")
     if selected == "cuda" and arch == "MDX":
         preload_onnx_cuda()
     output_dir = Path(output_dir).expanduser().resolve()
@@ -243,7 +259,8 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         outputs = _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
                                  output_format, tools, stage, original_name, selected == "cpu", torch,
                                  options=options, metrics=stats, vocal_gain_db=vocal_gain_db,
-                                 instrumental_gain_db=instrumental_gain_db)
+                                 instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix,
+                                 split_backing=split_backing)
         stats["total_seconds"] = time.perf_counter() - total_start
         if selected == "cuda":
             stats["peak_bytes"] = torch.cuda.max_memory_allocated()
@@ -254,10 +271,7 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
         raise RuntimeError(f"分离失败：{error}。恢复材料保留在：{work_dir}") from error
 
 
-def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
-                   output_format, tools, stage, original_name, cpu, torch, options=None, metrics=None,
-                   vocal_gain_db=0, instrumental_gain_db=0):
-    metrics = metrics if metrics is not None else {}
+def _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, options, metrics):
     prepare_start = time.perf_counter()
     separator = Separator(model_file_dir=str(MODEL_DIR), output_dir=str(work_dir),
                           output_format="WAV", use_soundfile=False, **(options or {}))
@@ -281,27 +295,58 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
     if not cpu:
         torch.cuda.synchronize()
     metrics["inference_seconds"] = time.perf_counter() - inference_start
-    stems = named_stems(returned, stem_dir, required)
+    by_label = named_stems(returned, stem_dir, required)
+    return {label: by_label[label] for label in required}
+
+
+def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
+                   output_format, tools, stage, original_name, cpu, torch, options=None, metrics=None,
+                   vocal_gain_db=0, instrumental_gain_db=0, prepare_mix=False, split_backing=False):
+    metrics = metrics if metrics is not None else {}
+    selected = "cpu" if cpu else "cuda"
+    stems = _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, options, metrics)
     for path in stems.values():
         verify_output(path, "WAV", tools)
-    stage("正在导出音频" + ("：MP3 320 kbps" if output_format == "MP3" else "：WAV PCM"))
+    if split_backing:
+        from vocal_split import BVE_MODEL, VOCAL_LABELS, split_vocals
+
+        # 基础模型已退出，只复用中间人声 WAV。释放空闲显存后再加载 BVE。
+        if not cpu:
+            torch.cuda.empty_cache()
+        bve_start = time.perf_counter()
+        split = split_vocals(Separator, stems.pop("Vocals"), work_dir / "bve", MODEL_DIR, selected, stage)
+        stems = {**{label: split[label] for label in VOCAL_LABELS}, **stems}
+        metrics.update(vocal_model=BVE_MODEL, vocal_device=selected, vocal_seconds=time.perf_counter() - bve_start)
+    required = tuple(stems)
+    from mix_tracks import align_track, song_timeline
+
+    timeline = mp3_timeline(*song_timeline(audio_path, work_dir, tools))
+    aligned = work_dir / "aligned"
+    aligned.mkdir()
+    for label in required:
+        stems[label] = align_track(stems[label], aligned / f"{label}.wav", timeline, tools)
+    stage("正在导出音频：MP3 320 kbps")
     export_start = time.perf_counter()
-    result_dir = reserve_result_dir(output_dir, song_title(original_name or audio_path.name))
+    result_dir = reserve_result_dir(output_dir, song_title(original_name or audio_path.name), max(required, key=len))
     staging = work_dir / "export"
     staging.mkdir()
     try:
         gain_report = {}
         encoded = export_stems(stems, staging, output_format, tools, result_dir.name,
                                vocal_gain_db=vocal_gain_db, instrumental_gain_db=instrumental_gain_db,
-                               gain_report=gain_report)
+                               gain_report=gain_report, labels=required)
         metrics["stem_gains"] = gain_report
-        stage(format_gain_report(gain_report["Vocals"], "人声"))
-        stage(format_gain_report(gain_report["Instrumental"], "伴奏"))
+        for label in required:
+            stage(format_gain_report(gain_report[label], TRACK_LABELS[label]))
         outputs = tuple(result_dir / path.name for path in encoded)
         for source, target in zip(encoded, outputs):
             with source.open("rb") as origin, target.open("xb") as destination:
                 shutil.copyfileobj(origin, destination)
             verify_output(target, output_format, tools)
+        if prepare_mix:
+            from mix_tracks import save_mix
+            stage("正在按原曲时间轴准备混音音轨")
+            save_mix(dict(zip(required, outputs)), result_dir, timeline)
     except Exception:
         # Remove only our empty reservation; never touch history or recovery WAVs.
         if not any(result_dir.iterdir()):
@@ -321,7 +366,7 @@ def main():
     devices.add_argument("--cpu", action="store_true", help="强制使用 CPU")
     devices.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
     parser.add_argument("--model", choices=list(MODELS), default=DEFAULT_MODEL)
-    parser.add_argument("--format", choices=["MP3", "WAV"], default="MP3")
+    parser.add_argument("--format", choices=["MP3"], default="MP3")
     parser.add_argument("--performance", choices=["quality", "balanced", "fast"], default="balanced")
     parser.add_argument("--vocal-gain-db", type=validate_gain, default=0,
                         help="分离后人声增益，0～12 dB；正增益启用前瞻峰值保护")

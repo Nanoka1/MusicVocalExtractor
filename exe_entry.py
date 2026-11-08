@@ -15,6 +15,10 @@ if __name__ == "__main__":
                           "data_dir": str(DATA_DIR), "model_dir": str(MODEL_DIR),
                           "output_dir": str(OUTPUT_DIR)}, ensure_ascii=False))
         raise SystemExit(0)
+    if sys.argv[1:] == ["--web-revision"]:
+        from runtime_paths import web_revision
+        print(web_revision())
+        raise SystemExit(0)
     if sys.argv[1:] == ["--gpu-check"]:
         from verify_gpu import main
         raise SystemExit(main())

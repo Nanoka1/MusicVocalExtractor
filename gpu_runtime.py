@@ -5,7 +5,7 @@ import os
 _dll_handles = []
 
 
-def select_device(requested="auto", cpu=False):
+def select_device(requested="auto", cpu=False, *, allow_cpu_fallback=False):
     import torch
     if requested == "auto":
         requested = os.environ.get("MVE_DEVICE", "auto")
@@ -22,8 +22,10 @@ def select_device(requested="auto", cpu=False):
             torch.cuda.synchronize()
             return "cuda"
         except Exception as error:
+            if requested == "auto" and allow_cpu_fallback:
+                return "cpu"
             raise RuntimeError(f"CUDA 初始化/运算失败，请主动选择 CPU：{error}") from error
-    if requested == "auto" and torch.version.cuda is not None:
+    if requested == "auto" and torch.version.cuda is not None and not allow_cpu_fallback:
         # A CUDA build with no available device must not conceal initialization errors.
         import subprocess
         try:

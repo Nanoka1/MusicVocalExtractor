@@ -18,15 +18,15 @@
 
 ## 构建与验收
 
-默认 CPU 构建使用固定候选目录 `dist/candidate-cpu/MusicVocalExtractor/` 和 `build/cpu/`；已有候选不覆盖，失败保留旧正式版。候选通过真实冻结 CLI、三个模型 CPU 推理、MP3/WAV、中文空格文件名、Gradio 实际路径及试听下载验收，生成文件 SHA-256 清单后才允许发布。发布前再次核对文件未改变，并检查目标/候选未运行。
+默认 CPU 构建按构建 ID 创建 `dist/candidate-cpu-<ID>/MusicVocalExtractor/` 和 `build/cpu-<ID>/`。候选通过冻结 CLI、网页资源、路径及 MP3 验收后生成文件 SHA-256 清单。发布前再次核对文件和目标进程。
 
-正式目录为 `dist/MusicVocalExtractor/`。原正式版及全部数据完整保留至固定 `.reference/formal-exe-rollback/`；该回退目录已经存在时停止，不无限累积回退目录，也不自动删除旧版本。新包不复制模型，配置只记录应用身份，独立分发时不携带开发者绝对目录。
+正式目录为 `dist/MusicVocalExtractor/`。原正式版整体保留至 `.reference/formal-before-<ID>/`。新包沿用正式版的显式数据或模型路径覆盖，并共用已有权重。
 
 ```powershell
-.\build_exe.ps1 -Cpu
-.\.venv\Scripts\python.exe verify_release.py --cpu --package dist/candidate-cpu/MusicVocalExtractor
-.\.venv\Scripts\python.exe publish_release.py --cpu
-.\.venv\Scripts\python.exe publish_release.py --cpu --publish
+$buildId = 'cpu-release-01'
+.\build_exe.ps1 -Cpu -BuildId $buildId
+.\.venv\Scripts\python.exe verify_release.py --cpu --package "dist/candidate-cpu-$buildId/MusicVocalExtractor"
+.\.venv\Scripts\python.exe publish_release.py --cpu --build-id $buildId --publish
 ```
 
 独立分发 EXE 已通过实际路径检查；测试使用同卷硬链接复用程序文件，不复制模型或重复占用大型程序文件的数据空间。源码、不同 dist 深度、显式配置、不可写目录、迁移同名保护和完整性已有自动化测试；真实 start.bat 从其他工作目录启动也显示根 outputs。此前 GPU 优化完整保留，当前所有真实推理验收均为 CPU，GPU 后续验收暂停，不要求独显直连。

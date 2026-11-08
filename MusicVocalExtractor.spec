@@ -1,7 +1,7 @@
 # Specific to the project's audio-separator 0.48 / Gradio 6.31 / torch 2.8 environment.
 import os
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules, copy_metadata
 
 root = Path(SPECPATH)
 if os.environ.get("MVE_BUILD_FLAVOR") == "GPU":
@@ -16,8 +16,12 @@ if os.environ.get("MVE_BUILD_FLAVOR") == "GPU":
         pass
     else:
         raise RuntimeError("Do not mix CPU and GPU ONNX Runtime")
-# Gradio's component metaclass reads UploadedAudio's defining source at import.
-datas = [(str(root / "app.py"), ".")]
+# Gradio reads UploadedAudio's defining source and the app reads the mixer assets at runtime.
+web_assets = [root / name for name in ("app.py", "mixer.html", "mixer.css", "mixer.js")]
+for asset in web_assets:
+    if not asset.is_file():
+        raise RuntimeError(f"Missing web asset: {asset}")
+datas = [(str(asset), ".") for asset in web_assets]
 for package in ("audio_separator", "gradio", "gradio_client", "huggingface_hub", "librosa", "numba", "safehttpx", "groovy", "hf_gradio"):
     # librosa and numba inspect source files for lazy loading/JIT cache locations.
     datas += collect_data_files(package, include_py_files=package in ("gradio", "gradio_client", "librosa", "numba"))
@@ -30,13 +34,18 @@ for distribution in ("audio-separator", "gradio", "gradio-client", "torch", "onn
 hiddenimports = [
     "audio_separator.separator.architectures.mdx_separator",
     "audio_separator.separator.architectures.mdxc_separator",
+    "audio_separator.separator.architectures.vr_separator",
+    # BVE 通过 librosa 延迟加载 samplerate，静态分析无法发现。
+    "samplerate",
     "uvicorn.logging", "uvicorn.loops.auto", "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets.auto", "uvicorn.lifespan.on",
 ]
 for package in ("audio_separator.separator.uvr_lib_v5", "audio_separator.separator.roformer", "gradio", "gradio_client", "librosa", "onnxruntime", "diffq"):
     hiddenimports += collect_submodules(package)
 
-binaries = []
+binaries = collect_dynamic_libs("samplerate", search_patterns=["libsamplerate-64bit.dll"])
+if not binaries:
+    raise RuntimeError("BVE requires the installed samplerate 64-bit DLL")
 ffmpeg_dir = os.environ.get("MVE_FFMPEG_DIR")
 if ffmpeg_dir:
     ffmpeg_dir = Path(ffmpeg_dir).resolve()

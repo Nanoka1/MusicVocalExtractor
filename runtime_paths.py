@@ -1,5 +1,6 @@
 """Persistent writable paths and local FFmpeg discovery for Python and onedir."""
 import os
+import hashlib
 import json
 import shutil
 import sys
@@ -8,6 +9,16 @@ from pathlib import Path
 
 SOURCE_DIR = Path(__file__).resolve().parent
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else SOURCE_DIR
+WEB_ASSETS = ("app.py", "mixer.html", "mixer.css", "mixer.js")
+
+
+def web_revision(folder=SOURCE_DIR):
+    """Identify the assets actually used by this source or frozen process."""
+    digest = hashlib.sha256()
+    for name in WEB_ASSETS:
+        digest.update(name.encode("ascii") + b"\0")
+        digest.update((Path(folder) / name).read_bytes())
+    return digest.hexdigest()[:16]
 
 
 def find_project_dir(app_dir, source_dir, frozen):

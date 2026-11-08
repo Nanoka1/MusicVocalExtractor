@@ -1,0 +1,28 @@
+<section class="mve-mixer" aria-label="多轨混音播放器">
+  <h2>多轨混音播放器</h2>
+  <p data-message role="status">分离完成后，音轨会显示在这里。</p>
+  <div data-controls hidden>
+    <div class="mve-controls">
+      <button type="button" data-play>播放</button>
+      <label class="mve-seek">进度 <input data-seek type="range" min="0" max="1" value="0" step="any"></label>
+      <span data-time>0:00 / 0:00</span>
+    </div>
+    <div data-tracks></div>
+    <label class="mve-track">
+      <span>总音量</span>
+      <input data-master type="range" min="0" max="100" value="100">
+      <output data-master-value>100%</output>
+    </label>
+    <div class="mve-controls">
+      <button type="button" data-reset>恢复默认</button>
+      <button type="button" data-enable>开启全部</button>
+      <button type="button" data-mute>静音全部</button>
+    </div>
+    <div class="mve-controls mve-export">
+      <span>MP3 · 320 kbps</span>
+      <button type="button" data-export>导出混音</button>
+      <a data-export-link hidden></a>
+      <span data-export-status role="status"></span>
+    </div>
+  </div>
+</section>
