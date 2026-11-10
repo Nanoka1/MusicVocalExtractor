@@ -10,20 +10,21 @@ const masterValue = find("[data-master-value]");
 const exportButton = find("[data-export]");
 const exportLink = find("[data-export-link]");
 const exportStatus = find("[data-export-status]");
-let context, masterGain, mix, request;
+let context, masterGain, outputGain, mix, playback;
 let tracks = [];
-let sources = [];
 let offset = 0;
-let startedAt = 0;
-let animation = 0;
+let syncTimer = 0;
 let gainFrame = 0;
 let scrubbing = false;
 const gainEnvelopes = new WeakMap();
 const RAMP_SECONDS = 0.040;
+const SYNC_INTERVAL_MS = 40;
+const SYNC_TOLERANCE = 0.015;
+const RESYNC_THRESHOLD = 0.100;
+const BUFFER_TIMEOUT_MS = 30000;
 
 function position() {
-  if (!sources.length) return offset;
-  return Math.min(mix.duration, offset + Math.max(0, context.currentTime - startedAt));
+  return playback?.audible ? Math.min(mix.duration, tracks[0].media.currentTime) : offset;
 }
 
 function clock(seconds) {
@@ -35,43 +36,170 @@ function paint() {
   if (!mix) return;
   if (!scrubbing) seek.value = position();
   time.textContent = clock(Number(seek.value)) + " / " + clock(mix.duration);
-  play.textContent = sources.length ? "暂停" : "播放";
+  play.textContent = playback ? "暂停" : "播放";
 }
 
-function stopSources() {
-  cancelAnimationFrame(animation);
-  for (const source of sources) {
-    source.stop();
-    source.disconnect();
+function silenceOutput() {
+  if (!outputGain) return;
+  outputGain.gain.cancelScheduledValues(context.currentTime);
+  outputGain.gain.setValueAtTime(0, context.currentTime);
+}
+
+function pauseTracks() {
+  silenceOutput();
+  for (const { media } of tracks) {
+    if (media) {
+      media.pause();
+      media.playbackRate = 1;
+    }
   }
-  sources = [];
 }
 
-function tick() {
-  if (position() >= mix.duration) {
-    stopSources();
+function stopPlayback() {
+  playback = null;
+  clearInterval(syncTimer);
+  pauseTracks();
+}
+
+function releaseTracks() {
+  for (const track of tracks) {
+    if (!track.media) continue;
+    const media = track.media;
+    track.media = null;
+    media.removeAttribute("src");
+    media.load();
+    track.source?.disconnect();
+    track.gain?.disconnect();
+    track.source = track.gain = null;
+  }
+}
+
+function playbackError(error) {
+  offset = position();
+  stopPlayback();
+  releaseTracks();
+  message.textContent = "播放失败 · " + error.message;
+  paint();
+}
+
+function ready(media) {
+  return !media.seeking && media.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA;
+}
+
+function seekTracks() {
+  for (const { media } of tracks) {
+    if (Math.abs(media.currentTime - offset) > 0.001) media.currentTime = offset;
+  }
+}
+
+function bufferAt(target) {
+  offset = target;
+  if (playback.audible) playback.deadline = performance.now() + BUFFER_TIMEOUT_MS;
+  playback.audible = false;
+  playback.buffering = true;
+  pauseTracks();
+  seekTracks();
+  message.textContent = "正在同步缓冲音轨…";
+  paint();
+}
+
+async function playTracks(run, resume) {
+  run.buffering = false;
+  run.starting = true;
+  try {
+    // 同一轮用户操作里发出所有 play()，等每条轨道可播后再打开输出。
+    await Promise.all([resume, ...tracks.map(async ({ media, label }) => {
+      try {
+        await media.play();
+      } catch (error) {
+        throw new Error(label + " · " + error.message);
+      }
+    })]);
+    if (playback === run) {
+      run.starting = false;
+      syncPlayback();
+    }
+  } catch (error) {
+    if (playback === run) playbackError(error);
+  }
+}
+
+function syncPlayback() {
+  const run = playback;
+  if (!run) return;
+  if (!run.audible && performance.now() >= run.deadline) {
+    playbackError(new Error("等待音轨缓冲超时"));
+    return;
+  }
+  if (run.starting) return;
+  if (run.buffering) {
+    if (tracks.every(({ media }) => ready(media))) playTracks(run);
+    return;
+  }
+
+  const reference = tracks[0].media.currentTime;
+  if (reference >= mix.duration || tracks.some(({ media }) => media.ended)) {
     offset = mix.duration;
-  } else {
-    animation = requestAnimationFrame(tick);
+    stopPlayback();
+    paint();
+    return;
+  }
+  if (mix.duration - reference > RESYNC_THRESHOLD && tracks.some(({ media }) => !ready(media))) {
+    bufferAt(offset);
+    return;
+  }
+  let aligned = true;
+  // 所有音轨持续解码，静音和 Solo 只改增益。小偏差逐渐收敛，避免频繁跳采样。
+  for (const { media } of tracks.slice(1)) {
+    const delta = reference - media.currentTime;
+    if (Math.abs(delta) > RESYNC_THRESHOLD) {
+      bufferAt(reference);
+      return;
+    }
+    if (Math.abs(delta) > 2 * SYNC_TOLERANCE) aligned = false;
+    media.playbackRate = Math.abs(delta) < SYNC_TOLERANCE ? 1 : 1 + Math.max(-0.03, Math.min(0.03, delta / 2));
+  }
+  offset = reference;
+  if (!run.audible && aligned) {
+    const now = context.currentTime;
+    const end = now + mix.duration - reference;
+    const fade = Math.min(mix.fadeSeconds, (end - now) / 2);
+    outputGain.gain.setValueAtTime(0, now);
+    outputGain.gain.linearRampToValueAtTime(1, now + fade);
+    outputGain.gain.setValueAtTime(1, end - fade);
+    outputGain.gain.linearRampToValueAtTime(0, end);
+    run.audible = true;
+    message.textContent = mixTitle();
   }
   paint();
 }
 
-function startSources() {
-  if (offset >= mix.duration) return;
-  applyGains(true);
-  // 一批音源共享 AudioContext 的同一个开始时间和采样偏移。
-  sources = tracks.map((track) => {
-    const source = context.createBufferSource();
-    source.buffer = track.buffer;
-    source.connect(track.gain);
-    return source;
-  });
-  startedAt = context.currentTime + 0.025;
-  for (const source of sources) {
-    source.start(startedAt, offset, mix.duration - offset);
+function prepareTracks() {
+  if (!context) {
+    context = new AudioContext();
+    masterGain = context.createGain();
+    outputGain = context.createGain();
+    outputGain.gain.value = 0;
+    masterGain.connect(outputGain).connect(context.destination);
   }
-  tick();
+  for (const track of tracks) {
+    if (track.media) continue;
+    const media = new Audio();
+    track.media = media;
+    media.preload = "auto";
+    media.addEventListener("error", () => {
+      if (playback && track.media === media) playbackError(new Error("无法播放 " + track.label));
+    });
+    media.addEventListener("waiting", () => {
+      if (playback?.audible && track.media === media && !ready(media) && mix.duration - offset > RESYNC_THRESHOLD) {
+        bufferAt(offset);
+      }
+    });
+    track.source = context.createMediaElementSource(media);
+    track.gain = context.createGain();
+    track.source.connect(track.gain).connect(masterGain);
+    media.src = track.url;
+  }
 }
 
 function effectiveVolumes() {
@@ -121,20 +249,8 @@ function applyVolumes() {
     track.soloButton.setAttribute("aria-pressed", String(track.solo));
   }
   masterValue.textContent = master.value + "%";
-  if (!sources.length) applyGains(true);
-  else if (!gainFrame) gainFrame = requestAnimationFrame(() => applyGains(!sources.length));
-}
-
-function fadeBufferEdges(buffer, seconds) {
-  const fade = Math.min(Math.floor(buffer.sampleRate * seconds), Math.floor(buffer.length / 2));
-  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
-    const samples = buffer.getChannelData(channel);
-    for (let i = 0; i < fade; i++) {
-      const gain = i / fade;
-      samples[i] *= gain;
-      samples[samples.length - 1 - i] *= gain;
-    }
-  }
+  if (!playback) applyGains(true);
+  else if (!gainFrame) gainFrame = requestAnimationFrame(() => applyGains(!playback));
 }
 
 function createTrack(track) {
@@ -179,10 +295,8 @@ function createTrack(track) {
 }
 
 function loadMix() {
-  if (request) request.abort();
-  stopSources();
-  for (const track of tracks) track.gain?.disconnect();
-  request = null;
+  stopPlayback();
+  releaseTracks();
   offset = 0;
   scrubbing = false;
   rows.replaceChildren();
@@ -205,55 +319,27 @@ function mixTitle() {
   return mix.title + (db < 0 ? " · 防削波余量 " + (-db).toFixed(1) + " dB" : "");
 }
 
-play.addEventListener("click", async () => {
-  if (sources.length) {
+play.addEventListener("click", () => {
+  if (!mix) return;
+  if (playback) {
     offset = position();
-    stopSources();
+    stopPlayback();
+    message.textContent = mixTitle();
     paint();
     return;
   }
-  const pending = new AbortController();
-  request = pending;
-  play.disabled = true;
   try {
-    if (!context) {
-      context = new AudioContext();
-      masterGain = context.createGain();
-      masterGain.connect(context.destination);
-    }
-    await context.resume();
-    for (const track of tracks) {
-      if (pending.signal.aborted) return;
-      if (track.buffer) continue;
-      message.textContent = "正在载入 " + track.label + "…";
-      const response = await fetch(track.url, { signal: pending.signal });
-      if (!response.ok) throw new Error("无法读取 " + track.label);
-      const buffer = await context.decodeAudioData(await response.arrayBuffer());
-      if (pending.signal.aborted) return;
-      if (Math.abs(buffer.duration - mix.duration) > 2 / buffer.sampleRate) {
-        throw new Error(track.label + "的时长与混音时间轴不一致");
-      }
-      fadeBufferEdges(buffer, mix.fadeSeconds);
-      track.buffer = buffer;
-      track.gain = context.createGain();
-      track.gain.connect(masterGain);
-    }
-    if (pending.signal.aborted) return;
+    prepareTracks();
     if (offset >= mix.duration) offset = 0;
-    applyVolumes();
-    startSources();
-    message.textContent = mixTitle();
+    seekTracks();
+    applyGains(true);
+    playback = { deadline: performance.now() + BUFFER_TIMEOUT_MS };
+    message.textContent = "正在缓冲音轨…";
+    playTracks(playback, context.resume());
+    syncTimer = setInterval(syncPlayback, SYNC_INTERVAL_MS);
+    paint();
   } catch (error) {
-    if (!pending.signal.aborted) {
-      stopSources();
-      paint();
-      message.textContent = "播放失败 · " + error.message;
-    }
-  } finally {
-    if (request === pending) {
-      request = null;
-      play.disabled = false;
-    }
+    playbackError(error);
   }
 });
 
@@ -290,9 +376,14 @@ function seekToSlider() {
   if (!scrubbing) return;
   scrubbing = false;
   offset = Number(seek.value);
-  const playing = sources.length > 0;
-  stopSources();
-  if (playing) startSources();
+  if (playback && offset >= mix.duration) {
+    stopPlayback();
+    message.textContent = mixTitle();
+  } else if (playback) {
+    // 让已取消的 play() Promise 无法恢复刚被拖动的时间轴。
+    playback = { deadline: performance.now() + BUFFER_TIMEOUT_MS };
+    bufferAt(offset);
+  }
   paint();
 }
 seek.addEventListener("change", seekToSlider);
