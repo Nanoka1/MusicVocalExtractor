@@ -168,6 +168,7 @@ def create_app():
         start = gr.Button("开始分离", variant="primary")
         status = gr.Textbox(label="处理状态", value="请选择音乐文件，然后点击“开始分离”。", interactive=False)
         downloads = gr.File(label="本次分离结果 · 点击下载", file_count="multiple", interactive=False)
+        gr.Markdown("失败后重新选择同一音频并保持相同设置，可自动恢复已校验的检查点；恢复状态见处理日志。")
         gr.Markdown(f"结果保存到 **{OUTPUT_DIR}**，每次任务使用独立目录。首次使用模型需要联网下载。处理期间请保持启动窗口打开。")
         with gr.Row():
             history = gr.Dropdown(label="已保存的混音", choices=saved_mixes(OUTPUT_DIR), scale=4)

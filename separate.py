@@ -14,6 +14,7 @@ from runtime_paths import DATA_DIR, MODEL_DIR, OUTPUT_DIR, configure_ffmpeg
 from gpu_runtime import device_info, preload_onnx_cuda, select_device, validate_loaded_device
 from performance import inference_options, infer_with_retry
 from audio_gain import validate_gain, render_stem_gain, finish_gain_report, format_gain_report
+from task_checkpoint import phase
 
 MODEL_NAME = DEFAULT_MODEL
 SUPPORTED_FORMATS = {".mp3", ".wav", ".flac", ".m4a"}
@@ -179,7 +180,7 @@ def named_stems(returned, folder, required):
 
 
 def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain_db=0,
-                 instrumental_gain_db=0, gain_report=None, labels=("Vocals", "Instrumental")):
+                 instrumental_gain_db=0, gain_report=None, labels=("Vocals", "Instrumental"), stage=None):
     """Encode and fully decode all tracks before the caller can publish/clean."""
     if output_format != "MP3":
         raise ValueError("仅支持 MP3（320 kbps）导出。")
@@ -201,7 +202,8 @@ def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain
             processed = source.parent / (label + "_gain.wav")
             report.update(render_stem_gain(source, processed, gain_db, tools, run_tool))
             source = processed
-        encode_mp3(source, target, tools)
+        with phase(stage or (lambda _: None), f"MP3 编码及完整解码验证：{TRACK_LABELS[label]}"):
+            encode_mp3(source, target, tools)
         if gain_db > 0:
             finish_gain_report(report, target)
         outputs.append(target)
@@ -211,7 +213,8 @@ def export_stems(stems, result_dir, output_format, tools, title=None, vocal_gain
 def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFAULT_MODEL,
                    output_format="MP3", progress_callback=None, original_name=None, device="auto",
                    performance_mode="balanced", metrics_callback=None, vocal_gain_db=0,
-                   instrumental_gain_db=0, prepare_mix=False, split_backing=False):
+                   instrumental_gain_db=0, prepare_mix=False, split_backing=False,
+                   resume_work=None, legacy_work=None, legacy_log=None):
     total_start = time.perf_counter()
     vocal_gain_db = validate_gain(vocal_gain_db)
     instrumental_gain_db = validate_gain(instrumental_gain_db)
@@ -254,13 +257,34 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     output_dir.mkdir(parents=True, exist_ok=True)
     work_root = DATA_DIR / "cache" / "separation"
     work_root.mkdir(parents=True, exist_ok=True)
-    work_dir = Path(tempfile.mkdtemp(prefix="work_", dir=work_root))
+    from separation_recovery import choose_work, identity
+    from task_checkpoint import atomic_json
+    from filelock import FileLock
+
+    settings = dict(model=model_name, options=options, device=selected, output_format=output_format,
+                    performance_mode=performance_mode, vocal_gain_db=vocal_gain_db,
+                    instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix, split_backing=split_backing)
+    with phase(stage, "正在校验输入、模型与任务检查点指纹"):
+        signature = lambda: identity(audio_path, model_name, MODEL_DIR, settings)
+        work_dir, checkpoint = choose_work(work_root, signature(), resume_work, stage)
     try:
-        outputs = _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
-                                 output_format, tools, stage, original_name, selected == "cpu", torch,
-                                 options=options, metrics=stats, vocal_gain_db=vocal_gain_db,
-                                 instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix,
-                                 split_backing=split_backing)
+        # Lock outside the work tree so success cleanup cannot remove an open Windows lock.
+        with FileLock(str(work_root / (work_dir.name + '.lock')), timeout=0):
+            # Re-read after taking the lock; discovery is only a read-only hint.
+            from task_checkpoint import read_json
+            checkpoint = read_json(work_dir / 'task.json')
+            try:
+                outputs = _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
+                                         output_format, tools, stage, original_name, selected == "cpu", torch,
+                                         options=options, metrics=stats, vocal_gain_db=vocal_gain_db,
+                                         instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix,
+                                         split_backing=split_backing, checkpoint=checkpoint, signature=signature,
+                                         legacy_work=legacy_work, legacy_log=legacy_log)
+            except (Exception, SystemExit) as error:
+                if work_dir.exists():
+                    checkpoint.update(status='failed', error=str(error))
+                    atomic_json(work_dir / 'task.json', checkpoint)
+                raise
         stats["total_seconds"] = time.perf_counter() - total_start
         if selected == "cuda":
             stats["peak_bytes"] = torch.cuda.max_memory_allocated()
@@ -268,6 +292,7 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
             metrics_callback(stats)
         return outputs
     except (Exception, SystemExit) as error:
+        stage(f"任务失败；通过校验的检查点已保留：{work_dir}")
         raise RuntimeError(f"分离失败：{error}。恢复材料保留在：{work_dir}") from error
 
 
@@ -283,15 +308,16 @@ def _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, 
     metrics["prepare_seconds"] = time.perf_counter() - prepare_start
     validate_loaded_device(separator, check_model(model_name), "cpu" if cpu else "cuda")
     required = ("Vocals", "Instrumental")
-    stage("正在进行人声分离（AI 推理及 WAV 写出；不提供整体百分比）")
+    stage("第一阶段：正在进行人声分离（AI 推理及 WAV 写出；不提供整体百分比）")
     output_names = {name: name for name in required}
     if model_name == ROFORMER_MODEL:
         # Kim's two-source training config calls the complete non-vocal mix 'other'.
         # This alias is specific to this verified two-stem model, never four-stem Other.
         output_names["other"] = "Instrumental"
     inference_start = time.perf_counter()
-    returned, stem_dir = infer_with_retry(separator, audio_path, output_names, work_dir, model_name,
-                                          "cpu" if cpu else "cuda", metrics, stage)
+    with phase(stage, "第一阶段模型推理及 WAV 写出"):
+        returned, stem_dir = infer_with_retry(separator, audio_path, output_names, work_dir, model_name,
+                                              "cpu" if cpu else "cuda", metrics, stage)
     if not cpu:
         torch.cuda.synchronize()
     metrics["inference_seconds"] = time.perf_counter() - inference_start
@@ -301,14 +327,48 @@ def _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, 
 
 def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
                    output_format, tools, stage, original_name, cpu, torch, options=None, metrics=None,
-                   vocal_gain_db=0, instrumental_gain_db=0, prepare_mix=False, split_backing=False):
+                   vocal_gain_db=0, instrumental_gain_db=0, prepare_mix=False, split_backing=False,
+                   checkpoint=None, signature=None, legacy_work=None, legacy_log=None):
     metrics = metrics if metrics is not None else {}
     selected = "cpu" if cpu else "cuda"
-    stems = _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, options, metrics)
+    from task_checkpoint import atomic_json, checked_paths
+    from separation_recovery import adopt_legacy, base_records
+    from mix_tracks import song_timeline
+
+    if checkpoint is not None:
+        attempt = Path(tempfile.mkdtemp(prefix='attempt_', dir=work_dir))
+        with phase(stage, '正在完整解码原曲，校验采样时间轴'):
+            original_timeline = song_timeline(audio_path, attempt, tools)
+        stems = None
+        if checkpoint.get('base'):
+            with phase(stage, '恢复校验：完整读取第一阶段人声及伴奏 WAV'):
+                stems = checked_paths(checkpoint['base'], work_dir)
+                base_records(stems, work_dir, original_timeline)
+            stage('第一阶段恢复：两条 WAV 已通过 SHA-256、完整解码及时间轴校验，跳过基础模型')
+            metrics.update(prepare_seconds=0, inference_seconds=0, resumed_base=True)
+        elif legacy_work:
+            with phase(stage, '正在校验旧任务日志及完整 WAV；原缓存保持保留'):
+                stems, provenance = adopt_legacy(legacy_work, legacy_log, audio_path, work_dir,
+                                                 model_name, original_timeline, stage)
+            checkpoint['legacy'] = provenance
+            metrics.update(prepare_seconds=0, inference_seconds=0, resumed_base=True)
+        if stems is None:
+            base_dir = Path(tempfile.mkdtemp(prefix='base_', dir=work_dir))
+            stems = _base_stems(Separator, audio_path, base_dir, model_name, stage, cpu, torch, options, metrics)
+        with phase(stage, '第一阶段后处理：完整校验并保存人声及伴奏检查点'):
+            checkpoint.update(base=base_records(stems, work_dir, original_timeline),
+                              identity=signature(), status='base_complete')
+            atomic_json(work_dir / 'task.json', checkpoint)
+        stage('第一阶段检查点已保存；后续失败可直接从第二阶段继续')
+    else:
+        attempt = work_dir
+        stems = _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, options, metrics)
     stage("正在校验分离音轨")
     for path in stems.values():
         verify_output(path, "WAV", tools)
     if split_backing:
+        import gc
+        gc.collect()
         from vocal_split import BVE_MODEL, VOCAL_LABELS, split_vocals
 
         # 基础模型已退出，只复用中间人声 WAV。释放空闲显存后再加载 BVE。
@@ -316,27 +376,30 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
             torch.cuda.empty_cache()
         bve_start = time.perf_counter()
         split = split_vocals(Separator, stems.pop("Vocals"), work_dir / "bve", MODEL_DIR, selected, stage)
+        if checkpoint is not None:
+            checkpoint.update(identity=signature(), status='bve_complete')
+            atomic_json(work_dir / 'task.json', checkpoint)
         stems = {**{label: split[label] for label in VOCAL_LABELS}, **stems}
         metrics.update(vocal_model=BVE_MODEL, vocal_device=selected, vocal_seconds=time.perf_counter() - bve_start)
     required = tuple(stems)
     stage("正在对齐音轨时间轴")
     from mix_tracks import align_track, song_timeline
 
-    timeline = mp3_timeline(*song_timeline(audio_path, work_dir, tools))
-    aligned = work_dir / "aligned"
+    timeline = mp3_timeline(*(original_timeline if checkpoint is not None else song_timeline(audio_path, work_dir, tools)))
+    aligned = attempt / "aligned"
     aligned.mkdir()
     for label in required:
         stems[label] = align_track(stems[label], aligned / f"{label}.wav", timeline, tools)
     stage("正在导出音频：MP3 320 kbps")
     export_start = time.perf_counter()
     result_dir = reserve_result_dir(output_dir, song_title(original_name or audio_path.name), max(required, key=len))
-    staging = work_dir / "export"
+    staging = attempt / "export"
     staging.mkdir()
     try:
         gain_report = {}
         encoded = export_stems(stems, staging, output_format, tools, result_dir.name,
                                vocal_gain_db=vocal_gain_db, instrumental_gain_db=instrumental_gain_db,
-                               gain_report=gain_report, labels=required)
+                               gain_report=gain_report, labels=required, stage=stage)
         metrics["stem_gains"] = gain_report
         for label in required:
             stage(format_gain_report(gain_report[label], TRACK_LABELS[label]))
@@ -370,6 +433,10 @@ def main():
     parser.add_argument("--model", choices=list(MODELS), default=DEFAULT_MODEL)
     parser.add_argument("--format", choices=["MP3"], default="MP3")
     parser.add_argument("--performance", choices=["quality", "balanced", "fast"], default="balanced")
+    parser.add_argument("--split-backing", action="store_true", help="进一步分离主唱与和声")
+    parser.add_argument("--resume-work", type=Path, help="显式指定 cache/separation/work_* 检查点；默认自动匹配")
+    parser.add_argument("--legacy-work", type=Path, help="采用旧版完整第一阶段 WAV；必须同时提供原曲和来源日志")
+    parser.add_argument("--legacy-log", type=Path, help="能关联原曲、模型与旧人声 WAV 的原任务日志")
     parser.add_argument("--vocal-gain-db", type=validate_gain, default=0,
                         help="分离后人声增益，0～12 dB；正增益启用前瞻峰值保护")
     parser.add_argument("--instrumental-gain-db", type=validate_gain, default=0,
@@ -377,17 +444,19 @@ def main():
     args = parser.parse_args()
     try:
         from performance import format_metrics
-        vocals, instrumental = separate_audio(args.audio, args.output_dir, args.cpu, args.model, args.format,
+        outputs = separate_audio(args.audio, args.output_dir, args.cpu, args.model, args.format,
                                               device=args.device, performance_mode=args.performance,
+                                              split_backing=args.split_backing, resume_work=args.resume_work,
+                                              legacy_work=args.legacy_work, legacy_log=args.legacy_log,
                                               vocal_gain_db=args.vocal_gain_db,
                                               instrumental_gain_db=args.instrumental_gain_db,
                                               metrics_callback=lambda stats: print(format_metrics(stats) + "\n" +
-                                                  format_gain_report(stats["stem_gains"]["Vocals"], "人声") + "\n" +
-                                                  format_gain_report(stats["stem_gains"]["Instrumental"], "伴奏")))
+                                                  "\n".join(format_gain_report(report, TRACK_LABELS[label])
+                                                            for label, report in stats['stem_gains'].items())))
     except Exception as error:
         print(f"分离失败：{error}", file=sys.stderr)
         return 1
-    print(f"分离完成！人声：{vocals}；伴奏：{instrumental}")
+    print("分离完成！" + "；".join(map(str, outputs)))
     return 0
 
 

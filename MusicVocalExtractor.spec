@@ -25,7 +25,7 @@ datas = [(str(asset), ".") for asset in web_assets]
 for package in ("audio_separator", "gradio", "gradio_client", "huggingface_hub", "librosa", "numba", "safehttpx", "groovy", "hf_gradio"):
     # librosa and numba inspect source files for lazy loading/JIT cache locations.
     datas += collect_data_files(package, include_py_files=package in ("gradio", "gradio_client", "librosa", "numba"))
-for distribution in ("audio-separator", "gradio", "gradio-client", "torch", "onnxruntime", "onnxruntime-gpu", "imageio-ffmpeg"):
+for distribution in ("audio-separator", "gradio", "gradio-client", "torch", "numpy", "librosa", "soundfile", "onnxruntime", "onnxruntime-gpu", "imageio-ffmpeg"):
     try:
         datas += copy_metadata(distribution)
     except Exception:
