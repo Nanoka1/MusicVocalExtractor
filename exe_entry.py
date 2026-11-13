@@ -3,6 +3,47 @@ import multiprocessing
 import sys
 
 
+class _ConsoleMirror:
+    """Keep the GUI log while sending live tqdm output to its console."""
+
+    def __init__(self, console, log):
+        self.console, self.log = console, log
+
+    def write(self, text):
+        self.log.write(text)
+        return self.console.write(text)
+
+    def flush(self):
+        self.log.flush()
+        self.console.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.console, name)
+
+
+def show_progress_console():
+    """Restore the GUI build's console on demand, before inference imports tqdm."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return
+    import ctypes
+    import logging
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    if kernel32.GetConsoleWindow():
+        return
+    if not kernel32.AllocConsole():
+        logging.warning("无法打开分离进度窗口，错误码 %s；请查看网页处理状态。", ctypes.get_last_error())
+        return
+    kernel32.SetConsoleTitleW("MusicVocalExtractor · 实时分离进度（关闭窗口将退出程序）")
+    try:
+        console = open("CONOUT$", "w", encoding="utf-8", errors="replace", buffering=1)
+    except OSError:
+        logging.exception("无法连接进度控制台；请查看网页处理状态。")
+        return
+    sys.stdout = _ConsoleMirror(console, sys.stdout)
+    sys.stderr = _ConsoleMirror(console, sys.stderr)
+
+
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     for stream in (sys.stdout, sys.stderr):

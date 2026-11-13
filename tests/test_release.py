@@ -16,7 +16,7 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             formal = root / "dist/MusicVocalExtractor"
-            candidate = root / "dist/candidate-gpu/MusicVocalExtractor"
+            candidate = root / "build/packaging/staging/gpu/MusicVocalExtractor"
             formal.mkdir(parents=True)
             candidate.mkdir(parents=True)
             (formal / "old.txt").write_text("old GPU version")
@@ -43,7 +43,7 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             formal = root / "dist/MusicVocalExtractor"
-            candidate = root / "dist/candidate-gpu/MusicVocalExtractor"
+            candidate = root / "build/packaging/staging/gpu/MusicVocalExtractor"
             formal.mkdir(parents=True); candidate.mkdir(parents=True)
             (formal / "old.txt").write_text("verified CPU fallback")
             (candidate / "new.txt").write_text("synthetic verified GPU candidate")

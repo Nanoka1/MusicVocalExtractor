@@ -51,8 +51,15 @@ def separation_updates(audio_path, model_name, output_format, performance_mode, 
     events = queue.Queue()
     active_models = f"{model_name} → {BVE_MODEL}" if split_backing else model_name
 
+    def report_stage(message):
+        events.put(("stage", message))
+        print(message, flush=True)
+
     def worker():
         try:
+            from exe_entry import show_progress_console
+
+            show_progress_console()
             stats = {}
             result = separate_audio(audio_path, OUTPUT_DIR, model_name=model_name, output_format=output_format,
                                     original_name=getattr(audio_path, "original_name", None),
@@ -60,7 +67,7 @@ def separation_updates(audio_path, model_name, output_format, performance_mode, 
                                     instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix,
                                     split_backing=split_backing,
                                     metrics_callback=stats.update,
-                                    progress_callback=lambda message: events.put(("stage", message)))
+                                    progress_callback=report_stage)
             events.put(("done", (result, stats)))
         except Exception as error:
             logging.exception("音频分离失败")

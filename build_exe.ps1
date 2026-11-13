@@ -10,7 +10,7 @@ $environment = if ($Gpu) { '.venv-gpu' } else { '.venv' }
 $python = Join-Path $PSScriptRoot "$environment\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $python)) { throw "Missing isolated $environment. See GPU_ACCELERATION.md." }
 if ($BuildId -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$') { throw 'Invalid build ID.' }
-$distRoot = Join-Path $PSScriptRoot "dist\candidate-$($flavor.ToLower())-$BuildId"
+$distRoot = Join-Path $PSScriptRoot "build\packaging\staging\$($flavor.ToLower())"
 $package = Join-Path $distRoot 'MusicVocalExtractor'
 if (Test-Path -LiteralPath $package) { throw "Existing candidate is preserved: $package. Verify/publish it or review it before building again." }
 $tempFolder = Join-Path $PSScriptRoot ".tools\build-tmp\$BuildId"
@@ -33,13 +33,13 @@ try {
             if ($LASTEXITCODE -ne 0) { throw 'Real CUDA preflight failed.' }
         } finally { Pop-Location }
     }
-    & $python -X utf8 -m PyInstaller --distpath $distRoot --workpath "build\$($flavor.ToLower())-$BuildId" MusicVocalExtractor.spec
+    & $python -X utf8 -m PyInstaller --distpath $distRoot --workpath "build\packaging\work\$($flavor.ToLower())" MusicVocalExtractor.spec
     if ($LASTEXITCODE -ne 0) { throw 'Build failed; candidate kept for diagnosis. Old releases were not changed.' }
     foreach ($name in @('FFMPEG_NOTICE.md','THIRD_PARTY_NOTICES.md','LICENSE')) {
         Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $package
     }
     # Keep explicit overrides valid even though the candidate has a different depth.
-    $settings = @{ application_id='MusicVocalExtractor'; schema_version=1 }
+    $settings = @{ application_id='MusicVocalExtractor'; schema_version=1; data_dir=$PSScriptRoot; model_dir=(Join-Path $PSScriptRoot 'models') }
     $formal = Join-Path $PSScriptRoot 'dist\MusicVocalExtractor'
     $formalConfig = Join-Path $formal 'runtime-config.json'
     if (Test-Path -LiteralPath $formalConfig) {

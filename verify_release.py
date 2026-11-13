@@ -158,8 +158,17 @@ def main():
                     assert audio_peak(download)["peak"] < 1
                 gain_proofs.append(dict(mode=mode, vocal_gain_db=vocal_db, instrumental_gain_db=inst_db,
                                         status=result[2], passed=True))
-            mixed = client.predict(handle_file(str(audio)), DEFAULT_MODEL, "MP3", "balanced",
-                                   "cpu" if args.cpu else "cuda", 0, 0, "vocals", api_name="/mix")
+            mix_job = client.submit(handle_file(str(audio)), DEFAULT_MODEL, "MP3", "balanced",
+                                    "cpu" if args.cpu else "cuda", 0, 0, "vocals", api_name="/mix")
+            stages = [update[1] for update in mix_job]
+            mixed = mix_job.result(timeout=300)
+            for stage in ("正在进行人声分离", "正在对齐音轨时间轴", "正在导出音频"):
+                assert any(stage in status for status in stages), f"网页缺少实时阶段：{stage}"
+            progress_logs = [validation / "web.log", *(validation / "data/cache/logs").glob("mve-*.log")]
+            console_log = "\n".join(log.read_text(encoding="utf-8", errors="replace")
+                                    for log in progress_logs if log.is_file())
+            assert "正在进行人声分离" in console_log and "正在导出音频" in console_log
+            assert "100%" in console_log, "缺少模型实际 tqdm 处理进度"
             assert "分离完成" in mixed[1] and ("和声推理设备：CPU" if args.cpu else "和声推理设备：CUDA") in mixed[1]
             mix = json.loads(mixed[2])
             assert [t["id"] for t in mix["tracks"]] == ["LeadVocals", "BackingVocals", "Instrumental"]
@@ -192,6 +201,7 @@ def main():
     report = {"passed": True, "gpu": not args.cpu, "cpu": args.cpu, "preflight": preflight, "model_proofs": proofs,
               "http_preview_download": True, "models_shared": True,
               "stem_gain_ui": gain_proofs, "web_revision": revision, "mp3_mix": True,
+              "live_stages": stages, "console_progress": True,
               "validation_artifacts": str(validation), "manifest": package_manifest(package)}
     (package / "release-validation.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Frozen {'CPU' if args.cpu else 'GPU'} acceptance PASS: {package}")

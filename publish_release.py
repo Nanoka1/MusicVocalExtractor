@@ -47,11 +47,11 @@ def main():
     root = Path(__file__).resolve().parent
     dist = (root / "dist").resolve()
     flavor = "cpu" if args.cpu else "gpu"
-    suffix = f"-{args.build_id}" if args.build_id else ""
-    candidate = (dist / f"candidate-{flavor}{suffix}" / "MusicVocalExtractor").resolve(strict=True)
+    staging = (root / "build" / "packaging" / "staging").resolve()
+    candidate = (staging / flavor / "MusicVocalExtractor").resolve(strict=True)
     target = (dist / "MusicVocalExtractor").resolve()
-    if not candidate.is_relative_to(dist) or not target.is_relative_to(dist):
-        raise RuntimeError("发布路径超出项目 dist。")
+    if not staging.is_relative_to(root.resolve()) or not candidate.is_relative_to(staging) or not target.is_relative_to(dist):
+        raise RuntimeError("发布路径超出项目打包暂存目录或 dist。")
     validate_candidate(candidate, require_gpu=not args.cpu)
     backup_name = args.backup_name or (f"formal-before-{args.build_id}" if args.build_id else
                                        ("formal-exe-rollback" if args.cpu else "formal-before-gpu-rollback"))

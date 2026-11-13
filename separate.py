@@ -305,6 +305,7 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
     metrics = metrics if metrics is not None else {}
     selected = "cpu" if cpu else "cuda"
     stems = _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, options, metrics)
+    stage("正在校验分离音轨")
     for path in stems.values():
         verify_output(path, "WAV", tools)
     if split_backing:
@@ -318,6 +319,7 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
         stems = {**{label: split[label] for label in VOCAL_LABELS}, **stems}
         metrics.update(vocal_model=BVE_MODEL, vocal_device=selected, vocal_seconds=time.perf_counter() - bve_start)
     required = tuple(stems)
+    stage("正在对齐音轨时间轴")
     from mix_tracks import align_track, song_timeline
 
     timeline = mp3_timeline(*song_timeline(audio_path, work_dir, tools))
