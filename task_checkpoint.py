@@ -57,7 +57,7 @@ def wav_record(path, root, expected=None):
             stream.seek(size + size % 2, 1)
     with sf.SoundFile(path) as audio:
         spec = [audio.frames, audio.samplerate, audio.channels]
-        if audio.frames <= 0 or audio.format != 'WAV':
+        if audio.frames <= 0 or audio.format not in {'WAV', 'WAVEX'}:
             raise ValueError(f'无效 WAV：{path}')
         if expected is not None and spec != list(expected):
             raise ValueError(f'音轨时间轴不一致：{path}，{spec} != {expected}')

@@ -337,14 +337,10 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
 
     if checkpoint is not None:
         attempt = Path(tempfile.mkdtemp(prefix='attempt_', dir=work_dir))
-        with phase(stage, '正在完整解码原曲，校验采样时间轴'):
-            original_timeline = song_timeline(audio_path, attempt, tools)
-        stems = None
-        if checkpoint.get('base'):
-            with phase(stage, '恢复校验：完整读取第一阶段人声及伴奏 WAV'):
-                stems = checked_paths(checkpoint['base'], work_dir)
-                base_records(stems, work_dir, original_timeline)
-            stage('第一阶段恢复：两条 WAV 已通过 SHA-256、完整解码及时间轴校验，跳过基础模型')
+        from input_audio import task_input
+        model_audio, original_timeline, stems = task_input(audio_path, work_dir, attempt,
+                                                          checkpoint, tools, stage)
+        if stems is not None:
             metrics.update(prepare_seconds=0, inference_seconds=0, resumed_base=True)
         elif legacy_work:
             with phase(stage, '正在校验旧任务日志及完整 WAV；原缓存保持保留'):
@@ -354,7 +350,7 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
             metrics.update(prepare_seconds=0, inference_seconds=0, resumed_base=True)
         if stems is None:
             base_dir = Path(tempfile.mkdtemp(prefix='base_', dir=work_dir))
-            stems = _base_stems(Separator, audio_path, base_dir, model_name, stage, cpu, torch, options, metrics)
+            stems = _base_stems(Separator, model_audio, base_dir, model_name, stage, cpu, torch, options, metrics)
         with phase(stage, '第一阶段后处理：完整校验并保存人声及伴奏检查点'):
             checkpoint.update(base=base_records(stems, work_dir, original_timeline),
                               identity=signature(), status='base_complete')
@@ -417,7 +413,12 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
         if not any(result_dir.iterdir()):
             result_dir.rmdir()
         raise
-    shutil.rmtree(work_dir)
+    if checkpoint is not None and checkpoint.get('preserve_work'):
+        checkpoint.update(status='complete', outputs=list(map(str, outputs)))
+        atomic_json(work_dir / 'task.json', checkpoint)
+        stage(f'本任务缓存及检查点按要求完整保留：{work_dir}')
+    else:
+        shutil.rmtree(work_dir)
     metrics["export_seconds"] = time.perf_counter() - export_start
     stage("分离完成")
     return outputs

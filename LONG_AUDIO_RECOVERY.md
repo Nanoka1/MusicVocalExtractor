@@ -37,3 +37,13 @@ Audio Separator VR 的 `inference_vr.postprocess` 对整段音频执行 `mask * 
 参考：[上游 VR 实现](https://github.com/nomadkaraoke/python-audio-separator/blob/main/audio_separator/separator/architectures/vr_separator.py)、[上游频谱转换实现](https://github.com/nomadkaraoke/python-audio-separator/blob/main/audio_separator/separator/uvr_lib_v5/spec_utils.py)。本项目使用实例局部适配器报告阶段并写浮点中间音频，不修改虚拟环境中的依赖文件。
 
 第一阶段 RoFormer 本身仍使用现有实现；此次限制的是新增 BVE 阶段的内存。恢复过程会增加磁盘占用和校验时间。未经过实际长音频、GPU、导出和恢复验证的构建不能仅凭编译成功认定为通过。
+
+## 原曲解码失败与已完成任务恢复
+
+完整输入现在会严格解码为浮点 PCM WAV，校验全部采样并保存输入哈希、实际时间轴与文件检查点；基础模型使用同一份 PCM，避免 MP3 被不同解码器重复解释。浮点 PCM 保留解码器输出，不在准备输入时量化为 16 位整数。
+
+恢复时先核实已有第一阶段音轨和保存的时间轴，完整成果通过校验后可直接进入 BVE，不必先重新解码原曲。792aa61 的旧任务若已有完整基础音轨，可校验同任务内的完整参考 WAV 补齐缺失的时间轴记录；不采用部分文件或存在歧义的参考。输入 PCM 损坏且尚无模型成果时，只重新准备输入，不覆盖损坏原件。
+
+原 MP3 的坏帧仍会导致严格解码失败，错误信息会明确指出原曲、失败步骤和保留目录。未关闭 `-xerror`，也不将容错解码、坏帧跳过或损失掩蔽表述为无损修复。旧缓存若缺少来源清单，必须核实关联并得到用户确认；只有文件长度相似不能作为采用依据。沿用旧分离音轨的时间轴也不能还原原始文件已损坏或已丢失的音频。
+
+有明确保留要求的恢复任务可在清单中标记 `preserve_work`。此类任务全部导出验证成功后写入 `complete` 和结果路径，保留全部缓存、失败尝试及检查点，不执行自动清理。

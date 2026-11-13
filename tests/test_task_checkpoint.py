@@ -9,7 +9,7 @@ import soundfile as sf
 
 from models import DEFAULT_MODEL
 from separate import separate_audio
-from task_checkpoint import identity_matches, read_json
+from task_checkpoint import atomic_json, identity_matches, read_json
 
 
 class TaskRecoveryTests(unittest.TestCase):
@@ -64,6 +64,8 @@ class TaskRecoveryTests(unittest.TestCase):
             state = read_json(work / 'task.json')
             self.assertEqual(set(state['base']), {'Vocals', 'Instrumental'})
             self.assertEqual(state['status'], 'failed')
+            state['preserve_work'] = True
+            atomic_json(work / 'task.json', state)
             stages = []
             with patch('separate.DATA_DIR', root), patch('separate.MODEL_DIR', models), \
                     patch('separate._base_stems', base), patch('vocal_split.split_vocals', bve):
@@ -72,13 +74,16 @@ class TaskRecoveryTests(unittest.TestCase):
                 sf.write(other, np.full((44100 * 4, 2), .2), 44100)
                 with self.assertRaisesRegex(ValueError, '不匹配'):
                     separate_audio(other, root / 'results', device='cpu', split_backing=True, resume_work=work)
-                result = separate_audio(audio, root / 'results', device='cpu', split_backing=True,
-                                        progress_callback=stages.append)
+                with patch('mix_tracks.song_timeline', side_effect=AssertionError('有效检查点不应重复解码原曲')):
+                    result = separate_audio(audio, root / 'results', device='cpu', split_backing=True,
+                                            progress_callback=stages.append)
             self.assertEqual(len(calls), 1)
             self.assertEqual(len(result), 3)
             self.assertTrue(any('跳过基础模型' in s for s in stages))
             self.assertTrue(all(sf.info(path).frames == 44100 * 4 for path in result))
-            self.assertFalse(work.exists())
+            self.assertTrue(work.exists())
+            self.assertEqual(read_json(work / 'task.json')['status'], 'complete')
+            self.assertEqual(len(read_json(work / 'task.json')['outputs']), 3)
 
 
 if __name__ == '__main__':

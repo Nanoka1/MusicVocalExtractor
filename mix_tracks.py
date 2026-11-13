@@ -22,7 +22,7 @@ def song_timeline(audio, work_dir, tools):
     ffmpeg = [tools["ffmpeg"], "-nostdin", "-v", "error", "-xerror", "-n"]
     # 按解码后的实际采样计数，避免容器时长、MP3 填充影响时间轴。
     reference = work_dir / "timeline.wav"
-    run_tool(ffmpeg + ["-i", str(audio), "-map", "0:a:0", "-c:a", "pcm_s16le", str(reference)])
+    run_tool(ffmpeg + ["-i", str(audio), "-map", "0:a:0", "-c:a", "pcm_f32le", str(reference)])
     original = sf.info(str(reference))
     return original.frames, original.samplerate, original.channels
 
