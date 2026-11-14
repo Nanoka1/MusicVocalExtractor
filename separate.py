@@ -155,7 +155,7 @@ def prepare_model(separator, model, stage, metrics=None, *, arch=None):
                     torch.cuda.synchronize()
             except SystemExit as error:
                 # MDXC can sys.exit(1) after a failed load; keep the UI worker alive.
-                raise RuntimeError(f"模型加载失败：{model}。请检查启动窗口日志；缓存已保留。") from error
+                raise RuntimeError(f"模型加载失败：{model}。请检查运行日志；缓存已保留。") from error
             if metrics is not None:
                 metrics["load_seconds"] = time.perf_counter() - load_start
     except Timeout as error:

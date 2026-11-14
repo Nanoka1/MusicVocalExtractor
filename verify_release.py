@@ -35,6 +35,7 @@ def main():
     args = parser.parse_args()
     package = args.package.resolve(strict=True)
     exe = package / "MusicVocalExtractor.exe"
+    gui = package / "MusicVocalExtractor-GUI.exe"
     revision = web_revision()
     assert web_revision(package / "_internal") == revision
     build = json.loads((package / "build-info.json").read_text(encoding="utf-8-sig"))
@@ -108,20 +109,23 @@ def main():
         port = sock.getsockname()[1]
     env["GRADIO_SERVER_PORT"] = str(port)
     address = f"http://127.0.0.1:{port}"
-    with (validation / "web.log").open("w", encoding="utf-8") as log:
-        child = subprocess.Popen([str(exe)], cwd=validation, env=env, stdout=log, stderr=subprocess.STDOUT, creationflags=flags)
+    startup_logs = validation / "data" / "cache" / "logs"
+    with subprocess.Popen([str(gui)], cwd=validation, env=env) as child:
         try:
             deadline = time.monotonic() + 120
             while True:
                 if child.poll() is not None:
-                    raise RuntimeError(f"EXE 启动失败，日志：{validation / 'web.log'}")
+                    raise RuntimeError(f"EXE 启动失败，日志目录：{startup_logs}")
                 try:
-                    if httpx.get(address + "/config", timeout=2).status_code == 200:
+                    if httpx.get(address + "/config", timeout=2).status_code == 200 and any(
+                        "MusicVocalExtractor 已就绪" in log.read_text(encoding="utf-8", errors="replace")
+                        for log in startup_logs.glob("mve-*.log")
+                    ):
                         break
                 except httpx.RequestError:
                     pass
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("EXE 启动超时。")
+                    raise RuntimeError(f"EXE 启动超时，日志目录：{startup_logs}")
                 time.sleep(.5)
             client = Client(address, download_files=str(validation / "downloads"), verbose=False)
             if not args.cpu:

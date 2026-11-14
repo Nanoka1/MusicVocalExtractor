@@ -3,6 +3,7 @@ import logging
 import os
 import queue
 import threading
+import time
 import webbrowser
 
 from runtime_paths import DATA_DIR, OUTPUT_DIR, SOURCE_DIR, web_revision
@@ -10,7 +11,11 @@ from runtime_paths import DATA_DIR, OUTPUT_DIR, SOURCE_DIR, web_revision
 os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 os.environ.setdefault("GRADIO_TEMP_DIR", str(DATA_DIR / "cache" / "gradio"))
 
+_gradio_start = time.perf_counter()
 import gradio as gr
+
+logger = logging.getLogger(__name__)
+logger.info("Gradio 导入耗时 %.2f 秒", time.perf_counter() - _gradio_start)
 
 from models import DEFAULT_MODEL, MODEL_CHOICES, TRACK_LABELS
 from separate import separate_audio
@@ -158,18 +163,20 @@ def create_app():
         gr.Markdown("分离前可设置音轨文件的导出增益。主唱和和声沿用人声增益，正增益启用峰值保护。")
         performance = gr.Dropdown(label="AI 分离性能模式", choices=MODE_CHOICES, value="balanced")
         device = gr.Dropdown(label="推理设备", choices=[("自动检测", "auto"), ("CUDA GPU（不可用时报错）", "cuda"), ("CPU", "cpu")], value=os.environ.get("MVE_DEVICE", "auto"))
-        hardware = gr.Textbox(label="GPU 加速状态", value=hardware_status(), interactive=False)
+        hardware = gr.Textbox(label="GPU 加速状态", value="正在检测 GPU 加速状态…", interactive=False)
         gr.Markdown("高质量使用更多重叠。RoFormer 的平衡／快速在 CUDA 下使用混合精度，显存不足时可降低分段重试一次。")
         def show_hardware(model_name, performance_mode, requested, separation_mode):
             active = f"{model_name} → {BVE_MODEL}" if separation_mode == "vocals" else model_name
             return f"{hardware_status()}\n模型：{active}\n性能模式：{MODES[performance_mode]}\n请求设备：{requested}（本次实际设备见处理状态）"
         for component in (model, performance, device, mode):
             component.change(show_hardware, inputs=[model, performance, device, mode], outputs=hardware, api_name=False)
+        # The browser can render the page before importing PyTorch and testing CUDA.
+        demo.load(hardware_status, outputs=hardware, queue=False, api_visibility="private")
         start = gr.Button("开始分离", variant="primary")
         status = gr.Textbox(label="处理状态", value="请选择音乐文件，然后点击“开始分离”。", interactive=False)
         downloads = gr.File(label="本次分离结果 · 点击下载", file_count="multiple", interactive=False)
         gr.Markdown("失败后重新选择同一音频并保持相同设置，可自动恢复已校验的检查点；恢复状态见处理日志。")
-        gr.Markdown(f"结果保存到 **{OUTPUT_DIR}**，每次任务使用独立目录。首次使用模型需要联网下载。处理期间请保持启动窗口打开。")
+        gr.Markdown(f"结果保存到 **{OUTPUT_DIR}**，每次任务使用独立目录。首次使用模型需要联网下载。处理期间请保持程序运行。")
         with gr.Row():
             history = gr.Dropdown(label="已保存的混音", choices=saved_mixes(OUTPUT_DIR), scale=4)
             load = gr.Button("载入混音")
@@ -200,15 +207,21 @@ def create_app():
 
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    started = time.perf_counter()
     demo = create_app().queue(max_size=8)
+    logger.info("Gradio 界面构建耗时 %.2f 秒", time.perf_counter() - started)
     try:
         # launch 返回前已等待 Gradio 的启动事件成功。使用本进程实际选到的端口。
+        started = time.perf_counter()
         _, address, _ = demo.launch(server_name="127.0.0.1", inbrowser=False, share=False,
                                     prevent_thread_lock=True, ssr_mode=False, allowed_paths=[str(OUTPUT_DIR)])
+        logger.info("Gradio 服务启动耗时 %.2f 秒", time.perf_counter() - started)
         url = f"{address.rstrip('/')}/?mve={web_revision()}"
         print(f"MusicVocalExtractor 已就绪 · {url}", flush=True)
         if os.environ.get("MVE_NO_BROWSER") != "1":
-            webbrowser.open(url)
+            logger.info("请求打开浏览器 · %s", url)
+            if not webbrowser.open(url):
+                logger.warning("无法自动打开浏览器，请访问 %s", url)
         demo.block_thread()
     finally:
         demo.close()

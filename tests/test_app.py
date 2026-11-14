@@ -10,6 +10,26 @@ from pathlib import Path
 
 @unittest.skipUnless(importlib.util.find_spec("gradio"), "未安装可选界面依赖")
 class InterfaceTests(unittest.TestCase):
+    def test_gpu_probe_runs_on_page_load(self):
+        from unittest.mock import patch
+        from app import create_app
+
+        probes = []
+
+        def probe():
+            probes.append(True)
+            return "CUDA GPU"
+
+        with patch("app.hardware_status", probe):
+            demo = create_app()
+        self.assertEqual(probes, [])
+        config = demo.get_config_file()
+        hardware = next(c for c in config["components"] if c["props"].get("label") == "GPU 加速状态")
+        event = next(d for d in config["dependencies"] if d["outputs"] == [hardware["id"]] and
+                     any(name == "load" for _, name in d["targets"]))
+        self.assertEqual(demo.fns[event["id"]].fn(), "CUDA GPU")
+        self.assertEqual(len(probes), 1)
+
     def test_upload_metadata_survives_cached_filename(self):
         from app import UploadedAudio, create_app
         from gradio.data_classes import FileData

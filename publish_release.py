@@ -23,7 +23,7 @@ def validate_candidate(package, require_gpu=True):
 
 def assert_not_running(folders):
     result = subprocess.run(["powershell.exe", "-NoProfile", "-Command",
-                             "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); Get-CimInstance Win32_Process -Filter \"Name='MusicVocalExtractor.exe'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"],
+                             "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); Get-CimInstance Win32_Process -Filter \"Name='MusicVocalExtractor.exe' OR Name='MusicVocalExtractor-GUI.exe'\" | Select-Object ProcessId,ExecutablePath | ConvertTo-Json -Compress"],
                             capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     rows = json.loads(result.stdout) if result.stdout.strip() else []
@@ -74,7 +74,7 @@ def main():
             if retained and not target.exists():
                 backup.rename(target)
             raise
-        print(f"发布完成：{target / 'MusicVocalExtractor.exe'}")
+        print(f"发布完成：{target / 'MusicVocalExtractor-GUI.exe'}")
     else:
         print("仅预览；使用 --publish 执行已验证候选的移动。")
 

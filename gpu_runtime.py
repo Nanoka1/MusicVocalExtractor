@@ -1,6 +1,8 @@
 """Explicit device selection and evidence from the engine's actual runtime."""
 from pathlib import Path
+import logging
 import os
+import time
 
 _dll_handles = []
 
@@ -65,6 +67,7 @@ def device_info(device):
 
 
 def hardware_status():
+    started = time.perf_counter()
     try:
         selected = select_device()
         info = device_info(selected)
@@ -72,7 +75,10 @@ def hardware_status():
             return f"显卡：{info['name']}\n可用设备：CUDA GPU\n显存：{info['total_bytes'] / 1024**3:.2f} GiB（空闲 {info['free_bytes'] / 1024**3:.2f} GiB）"
         return f"当前未启用 GPU 加速\n正在使用 CPU 模式（PyTorch {info['torch']}）"
     except Exception as error:
+        logging.exception("GPU 检查失败")
         return f"GPU 检查失败：{error}"
+    finally:
+        logging.getLogger(__name__).info("GPU 状态检测耗时 %.2f 秒", time.perf_counter() - started)
 
 
 def onnx_session(separator):

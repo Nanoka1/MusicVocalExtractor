@@ -18,7 +18,7 @@
 
 ## 怎么使用？
 
-1. 双击 `dist/MusicVocalExtractor/MusicVocalExtractor.exe`，保留旁边的 `_internal` 文件夹。服务就绪后，程序会在浏览器打开本次启动的网址。已打包的程序自带 Python 运行时。
+1. 双击 `dist/MusicVocalExtractor/MusicVocalExtractor-GUI.exe`，或将桌面快捷方式指向它。保留整个程序目录。服务就绪后会自动打开浏览器。需要执行命令行操作时，使用同目录的 `MusicVocalExtractor.exe`。
 2. 如果只下载了源码，按[源码调试说明](#windows-双击启动)使用 `start.bat`。
 3. 选择歌曲和分离模式，点击 **“开始分离”**。
 4. 完成后使用下方混音器试听。调整音量后点击「导出混音」，导出文件位于当前歌曲目录的 `mix-exports/`。
@@ -26,6 +26,8 @@
 本次 EXE、MP3 和音量过渡的变更记录见 [EXE_MP3_VALIDATION.md](EXE_MP3_VALIDATION.md)。
 
 浏览器只是操作界面，歌曲在你的电脑上处理，不上传到云端。第一次安装依赖、下载模型需要联网。没有 NVIDIA 显卡也可以使用 CPU 处理，但可能需要多等一会儿。
+
+桌面版在数据目录的 `cache/logs/` 下为每次运行保存一份日志，包含本地网址和错误详情。启动时数据目录不可用的报错记录在系统临时目录。退出桌面版时，请在任务管理器结束 `MusicVocalExtractor-GUI.exe`。
 
 分离效果会随歌曲变化，主唱与和声可能有串音。模型选型、吉他角色候选及本机整曲测试见 [MULTITRACK_MODELS.md](MULTITRACK_MODELS.md)。
 
@@ -60,7 +62,7 @@ MP3 通过 FFmpeg `libmp3lame -b:a 320k` 编码，每轨都核验格式并完整
 
 Python 版模型和输出位于项目 `models/`、`outputs/歌曲名/`。Gradio 在预处理上传元信息时保留 `FileData.orig_name`，不将缓存路径名误当歌曲名；CLI 使用输入路径文件名。名称清理 Windows 非法字符及保留设备名，按 UTF-16 路径预算截短；通过原子 mkdir 分配同名的 `歌曲名 (2)`、`歌曲名 (3)`，支持并发，不覆盖历史。EXE 版默认位于 EXE 旁的相应目录；目录不可写时使用 `%LOCALAPPDATA%/MusicVocalExtractor/`。可通过 `MVE_DATA_DIR` 指定数据根目录；原有 `AUDIO_SEPARATOR_MODEL_DIR` 模型路径配置继续有效。
 
-进度为真实阶段及不确定进度条，不会显示伪造的整体百分比；推理阶段包含引擎内部的 WAV 写出。首次下载的字节进度仍可在启动窗口查看。
+进度为真实阶段及不确定进度条，不会显示伪造的整体百分比；推理阶段包含引擎内部的 WAV 写出。首次下载的字节进度可在桌面版运行日志或命令行窗口查看。
 
 ### 构建 Windows EXE
 

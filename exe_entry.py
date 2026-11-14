@@ -44,8 +44,46 @@ def show_progress_console():
     sys.stderr = _ConsoleMirror(console, sys.stderr)
 
 
+def run_windowed():
+    import logging
+    import os
+    import tempfile
+    import traceback
+    from datetime import datetime
+    from pathlib import Path
+
+    name = f"mve-{datetime.now():%Y%m%d-%H%M%S}-{os.getpid()}.log"
+    try:
+        from runtime_paths import DATA_DIR
+
+        logs = DATA_DIR / "cache" / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        log_path = logs / name
+        log = log_path.open("a", encoding="utf-8", errors="replace", buffering=1)
+    except Exception:
+        # A malformed config or unwritable data directory can fail before logging is available.
+        log_path = Path(tempfile.gettempdir()) / name
+        log_path.write_text(traceback.format_exc(), encoding="utf-8", errors="replace")
+        raise RuntimeError(f"启动失败，请查看日志：{log_path}") from None
+
+    # PyInstaller's windowed bootloader does not provide standard streams.
+    sys.stdout = sys.stderr = log
+    logging.basicConfig(stream=log, level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.info("开始启动 MusicVocalExtractor")
+    try:
+        from app import main
+
+        main()
+    except Exception:
+        logging.exception("MusicVocalExtractor 启动或运行失败")
+        raise RuntimeError(f"启动或运行失败，请查看日志：{log_path}") from None
+
+
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    if sys.stdout is None and sys.stderr is None:
+        run_windowed()
+        raise SystemExit(0)
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8", errors="replace")

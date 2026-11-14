@@ -64,4 +64,6 @@ a = Analysis([str(root / "exe_entry.py")], pathex=[str(root)], binaries=binaries
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="MusicVocalExtractor",
           debug=False, bootloader_ignore_signals=False, strip=False, upx=False, console=True)
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="MusicVocalExtractor")
+gui = EXE(pyz, a.scripts, [], exclude_binaries=True, name="MusicVocalExtractor-GUI",
+          debug=False, bootloader_ignore_signals=False, strip=False, upx=False, console=False)
+coll = COLLECT(exe, gui, a.binaries, a.datas, strip=False, upx=False, name="MusicVocalExtractor")
