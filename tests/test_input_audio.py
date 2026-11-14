@@ -33,74 +33,23 @@ class InputCheckpointTests(unittest.TestCase):
         folder.mkdir()
         return folder
 
-    def test_decoded_input_is_checkpointed_and_reused_before_models(self):
+    def test_every_attempt_decodes_again_even_with_old_records(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             audio, checkpoint = self.fixture(root)
             source, timeline, stems = task_input(audio, root, self.attempt(root, 'attempt_first'),
                                                 checkpoint, configure_ffmpeg(), lambda _: None)
-            self.assertEqual(timeline, (44100, 44100, 2))
+            original = source.read_bytes()
+            checkpoint['base'] = {'Vocals': {'path': '../missing.wav'}}
+            checkpoint['decoded_input']['sha256'] = 'damaged old record'
+            with patch('task_checkpoint.checked_paths', side_effect=AssertionError('不应读取旧检查点')):
+                fresh, second_timeline, stems = task_input(audio, root, self.attempt(root, 'attempt_next'),
+                                                         checkpoint, configure_ffmpeg(), lambda _: None)
+            self.assertNotEqual(source, fresh)
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual(timeline, second_timeline)
+            self.assertEqual(sf.info(fresh).subtype, 'FLOAT')
             self.assertIsNone(stems)
-            self.assertEqual(sf.info(source).subtype, 'FLOAT')
-            self.assertEqual(checkpoint['status'], 'input_complete')
-            with patch('mix_tracks.song_timeline', side_effect=AssertionError('重复解码')):
-                recovered, recovered_timeline, _ = task_input(audio, root, self.attempt(root, 'attempt_next'),
-                    checkpoint, configure_ffmpeg(), lambda _: None)
-            self.assertEqual(recovered, source)
-            self.assertEqual(recovered_timeline, timeline)
-
-    def test_completed_base_uses_saved_timeline_even_if_decoded_copy_is_damaged(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            audio, checkpoint = self.fixture(root)
-            source, timeline, _ = task_input(audio, root, self.attempt(root, 'attempt_first'),
-                                            checkpoint, configure_ffmpeg(), lambda _: None)
-            checkpoint['base'] = {}
-            for label in ('Vocals', 'Instrumental'):
-                target = root / (label + '.wav')
-                shutil.copy2(source, target)
-                checkpoint['base'][label] = wav_record(target, root)
-            source.write_bytes(b'partial retained')
-            with patch('mix_tracks.song_timeline', side_effect=AssertionError('不应重复解码原曲')):
-                recovered, actual, stems = task_input(audio, root, self.attempt(root, 'attempt_resume'),
-                    checkpoint, configure_ffmpeg(), lambda _: None)
-            self.assertIsNone(recovered)
-            self.assertEqual(actual, timeline)
-            self.assertEqual(set(stems), {'Vocals', 'Instrumental'})
-            self.assertEqual(source.read_bytes(), b'partial retained')
-
-    def test_792_checkpoint_can_reuse_its_complete_reference_but_not_a_partial_one(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            audio, checkpoint = self.fixture(root)
-            checkpoint['base'] = {}
-            for label in ('Vocals', 'Instrumental'):
-                target = root / (label + '.wav')
-                shutil.copy2(audio, target)
-                checkpoint['base'][label] = wav_record(target, root)
-            partial = self.attempt(root, 'attempt_failed') / 'timeline.wav'
-            partial.write_bytes(b'RIFF incomplete')
-            reference = self.attempt(root, 'attempt_ok') / 'timeline.wav'
-            shutil.copy2(audio, reference)
-            with patch('mix_tracks.song_timeline', side_effect=AssertionError('不应再次解码')):
-                _, timeline, stems = task_input(audio, root, self.attempt(root, 'attempt_resume'),
-                    checkpoint, configure_ffmpeg(), lambda _: None)
-            self.assertEqual(timeline, (44100,44100,2))
-            self.assertEqual(checkpoint['decoded_input']['path'], 'attempt_ok/timeline.wav')
-            self.assertEqual(partial.read_bytes(), b'RIFF incomplete')
-
-    def test_bad_pcm_is_redecoded_without_overwriting_the_failed_file(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            audio, checkpoint = self.fixture(root)
-            source, _, _ = task_input(audio, root, self.attempt(root, 'attempt_first'),
-                                      checkpoint, configure_ffmpeg(), lambda _: None)
-            source.write_bytes(source.read_bytes()[:-20])
-            broken = source.read_bytes()
-            recovered, _, _ = task_input(audio, root, self.attempt(root, 'attempt_repair'),
-                checkpoint, configure_ffmpeg(), lambda _: None)
-            self.assertNotEqual(source, recovered)
-            self.assertEqual(source.read_bytes(), broken)
 
     def test_source_decode_failure_never_becomes_input_success(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -134,26 +83,3 @@ class InputCheckpointTests(unittest.TestCase):
             self.assertNotIn('decoded_input', checkpoint)
             self.assertTrue((attempt/'timeline.wav').exists())
             self.assertEqual(digest(audio), original_hash)
-
-    def test_confirmed_legacy_timeline_must_bind_current_input_and_both_stem_hashes(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            audio, checkpoint = self.fixture(root)
-            checkpoint['base'] = {}
-            for label in ('Vocals', 'Instrumental'):
-                target = root / (label + '.wav')
-                shutil.copy2(audio, target)
-                checkpoint['base'][label] = wav_record(target, root)
-            checkpoint['timeline'] = [44100,44100,2]
-            checkpoint['timeline_source'] = dict(kind='confirmed_existing_stems',
-                input_sha256=checkpoint['identity']['audio_sha256'],
-                base_sha256={k:v['sha256'] for k,v in checkpoint['base'].items()})
-            with patch('mix_tracks.song_timeline', side_effect=AssertionError('不应解码坏原曲')):
-                _, timeline, stems = task_input(audio, root, self.attempt(root, 'attempt_ok'),
-                    checkpoint, configure_ffmpeg(), lambda _: None)
-                self.assertEqual(timeline, (44100,44100,2))
-                self.assertEqual(set(stems), {'Vocals','Instrumental'})
-                checkpoint['timeline_source']['base_sha256']['Vocals'] = 'wrong'
-                with self.assertRaisesRegex(ValueError, '时间轴与音轨文件不匹配'):
-                    task_input(audio, root, self.attempt(root, 'attempt_wrong'),
-                        checkpoint, configure_ffmpeg(), lambda _: None)

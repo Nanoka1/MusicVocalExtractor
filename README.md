@@ -58,7 +58,7 @@ Python API 和 Gradio `/separate` 保留两轨输出及原有导出增益参数�
 
 当前可选及默认模型为 **MelBand RoFormer · Kim**（`vocals_mel_band_roformer.ckpt`），复用已下载的约 913 MB 权重；Windows CPU 与 RTX 5060 CUDA 加载/推理已验证。按用户明确选择停用 Voc FT（`UVR-MDX-NET-Voc_FT.onnx`）和 Inst HQ 3（`UVR-MDX-NET-Inst_HQ_3.onnx`），不再提供这两个选项或下载它们。此前移除的 Karaoke 2、htdemucs 不恢复；其他模型权重和通用 MDX/ONNX 推理依赖不受影响。尚未完成真实歌曲音质 AB 验证，不将默认设置等同于音质排名。参数和旧配置处理见 [MODEL_VERIFICATION.md](MODEL_VERIFICATION.md)，候选研究见 [MODEL_RESEARCH.md](MODEL_RESEARCH.md)，此前升级记录见 [UPGRADE_VERIFICATION.md](UPGRADE_VERIFICATION.md)。
 
-MP3 通过 FFmpeg `libmp3lame -b:a 320k` 编码，每轨都核验格式并完整解码。新任务保存 MP3 和 `mix/timeline.json`，同步试听直接读取已保存的 MP3，已有 WAV 记录仍可加载。编码保留时长、常用的 32、44.1 和 48 kHz 采样率，以及单声道或立体声。其他采样率转为 44.1 kHz，多声道按 MP3 的限制混合为立体声。成功后自动清理中间 WAV。分离失败时，恢复文件保留在错误提示所列的 `cache/separation/work_*/`。
+MP3 通过 FFmpeg `libmp3lame -b:a 320k` 编码，每轨都核验格式并完整解码。新任务保存 MP3 和 `mix/timeline.json`，同步试听直接读取已保存的 MP3，已有 WAV 记录仍可加载。编码保留时长、常用的 32、44.1 和 48 kHz 采样率，以及单声道或立体声。其他采样率转为 44.1 kHz，多声道按 MP3 的限制混合为立体声。成功后自动清理中间 WAV。每次点击“开始分离”都会创建新的 UUID 任务及独立 `cache/separation/work_*/`，相同歌曲也从零计算，不查找或复用历史检查点。成功验证全部 MP3 和混音清单后，仅清理本次任务临时文件。失败时显示原始错误及本次诊断目录，再次开始会创建另一个新任务。旧缓存、模型、原曲和历史输出不会被启动流程清理。
 
 Python 版模型和输出位于项目 `models/`、`outputs/歌曲名/`。Gradio 在预处理上传元信息时保留 `FileData.orig_name`，不将缓存路径名误当歌曲名；CLI 使用输入路径文件名。名称清理 Windows 非法字符及保留设备名，按 UTF-16 路径预算截短；通过原子 mkdir 分配同名的 `歌曲名 (2)`、`歌曲名 (3)`，支持并发，不覆盖历史。EXE 版默认位于 EXE 旁的相应目录；目录不可写时使用 `%LOCALAPPDATA%/MusicVocalExtractor/`。可通过 `MVE_DATA_DIR` 指定数据根目录；原有 `AUDIO_SEPARATOR_MODEL_DIR` 模型路径配置继续有效。
 

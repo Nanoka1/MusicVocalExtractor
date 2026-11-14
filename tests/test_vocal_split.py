@@ -53,7 +53,7 @@ class VocalSplitTests(unittest.TestCase):
                 self.assertEqual(actual.shape, (44100 * 4, 2))
                 np.testing.assert_allclose(actual, value, atol=2e-7)
 
-    def test_interruption_resume_corruption_and_parameter_mismatch(self):
+    def test_failure_and_repeated_calls_always_process_every_chunk(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             audio, work = root / 'vocals.wav', root / 'bve'
@@ -70,15 +70,16 @@ class VocalSplitTests(unittest.TestCase):
                                         chunk_seconds=seconds)
             with self.assertRaises(SystemExit):
                 run([])
-            state = read_json(work / 'chunks.json')
+            first_run = next(work.glob('run_*'))
+            state = read_json(first_run / 'chunks.json')
             self.assertEqual(list(state['completed']), ['0'])
-            saved = work / state['completed']['0']['stems']['LeadVocals']['path']
+            saved = first_run / state['completed']['0']['stems']['LeadVocals']['path']
             original = saved.read_bytes()
             Engine.calls, Engine.fail_at = [], None
             stages = []
             stems = run(stages)
-            self.assertEqual(len(Engine.calls), 2)
-            self.assertTrue(any('跳过第 1/3' in s for s in stages))
+            self.assertEqual(len(Engine.calls), 3)
+            self.assertFalse(any('跳过' in s or '恢复校验' in s for s in stages))
             self.assertEqual(saved.read_bytes(), original)
             for label, multiplier in [('LeadVocals', .75), ('BackingVocals', .25)]:
                 actual, _ = sf.read(stems[label], dtype='float32')
@@ -87,10 +88,12 @@ class VocalSplitTests(unittest.TestCase):
             saved.write_bytes(original[:-100])
             Engine.calls = []
             run([])
-            self.assertEqual(len(Engine.calls), 1)
+            self.assertEqual(len(Engine.calls), 3)
             self.assertEqual(saved.read_bytes(), original[:-100])
-            with self.assertRaisesRegex(ValueError, '参数已变化'):
-                run([], seconds=7)
+            Engine.calls = []
+            run([], seconds=7)
+            self.assertEqual(len(Engine.calls), 2)
+            self.assertEqual(len(list(work.glob('run_*'))), 4)
 
     def test_truncated_and_nonfinite_wav_are_not_checkpoints(self):
         with tempfile.TemporaryDirectory() as folder:

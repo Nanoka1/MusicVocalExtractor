@@ -4,7 +4,7 @@ from pathlib import Path
 
 from separate import named_stems, prepare_model
 from gpu_runtime import validate_loaded_device
-from task_checkpoint import atomic_json, checked_paths, digest, identity_matches, model_signature, phase, read_json, wav_record
+from task_checkpoint import atomic_json, digest, model_signature, phase, wav_record
 from bounded_vr import CHUNK_SECONDS, VOCAL_LABELS, VR_PARAMS, blend_chunks, chunk_plan, instrument_model
 
 BVE_MODEL = "UVR-BVE-4B_SN-44100-1.pth"
@@ -16,42 +16,25 @@ def split_vocals(Separator, audio, work_dir, model_dir, device, stage, *, chunk_
     import torch
     from filelock import FileLock
 
-    work_dir = Path(work_dir)
-    work_dir.mkdir(parents=True, exist_ok=True)
+    parent = Path(work_dir)
+    parent.mkdir(parents=True, exist_ok=True)
+    # Even direct callers using an old BVE directory receive a fresh run.
+    work_dir = Path(tempfile.mkdtemp(prefix='run_', dir=parent))
     with FileLock(str(work_dir / 'chunks.lock'), timeout=0):
         info = sf.info(audio)
         if info.samplerate != 44100 or info.channels != 2:
-            raise ValueError('BVE 恢复输入必须为 44100 Hz 双声道人声 WAV。')
+            raise ValueError('BVE 输入必须为 44100 Hz 双声道人声 WAV。')
         plan = chunk_plan(info.frames, info.samplerate, chunk_seconds)
         identity = dict(schema=1, input=digest(audio), spec=[info.frames, info.samplerate, info.channels],
                         models=model_signature(model_dir, [BVE_MODEL, 'vr_model_data.json']),
                         params=VR_PARAMS, chunks=plan, device=device)
         manifest = work_dir / 'chunks.json'
-        state = read_json(manifest) if manifest.exists() else dict(identity=identity, completed={})
-        allowed = (BVE_MODEL, 'vr_model_data.json') if not state['completed'] else ()
-        if not identity_matches(state['identity'], identity, allowed):
-            raise ValueError('BVE 检查点的输入、模型或分块参数已变化；原数据已保留。')
-        state['identity'] = identity
+        state = dict(identity=identity, completed={})
         atomic_json(manifest, state)
         engine = None
         entries = []
         for index, item in enumerate(plan):
             key = str(index)
-            entry = state['completed'].get(key)
-            if entry is not None:
-                try:
-                    if entry['plan'] != item or set(entry['stems']) != set(VOCAL_LABELS):
-                        raise ValueError('分块范围或标签已变化。')
-                    checked_paths(entry['stems'], work_dir)
-                    if any(r['spec'] != [item['b'] - item['a'], 44100, 2] for r in entry['stems'].values()):
-                        raise ValueError('分块帧数不一致。')
-                except (OSError, ValueError, KeyError, RuntimeError) as error:
-                    stage(f'恢复校验：第 {index + 1} 块无效，将保留原文件并重算：{error}')
-                    entry = None
-            if entry is not None:
-                stage(f'第二阶段恢复：已校验并跳过第 {index + 1}/{len(plan)} 块')
-                entries.append(entry)
-                continue
             stage(f'第二阶段分块：开始第 {index + 1}/{len(plan)} 块；已完成 {len(entries)}/{len(plan)}')
             attempt = Path(tempfile.mkdtemp(prefix=f'chunk_{index:05d}_', dir=work_dir))
             source_path = attempt / 'input.wav'
@@ -103,7 +86,7 @@ def split_vocals(Separator, audio, work_dir, model_dir, device, stage, *, chunk_
             state['completed'][key] = entry
             atomic_json(manifest, state)
             entries.append(entry)
-            stage(f'第二阶段分块：已完成并校验 {len(entries)}/{len(plan)} 块（检查点已保存）')
+            stage(f'第二阶段分块：已完成并校验 {len(entries)}/{len(plan)} 块（本次临时分块已保存）')
         merge_dir = Path(tempfile.mkdtemp(prefix='merge_', dir=work_dir))
         with phase(stage, '第二阶段音频后处理：合并交叉淡化音轨及统一峰值保护'):
             stems = blend_chunks(entries, work_dir, merge_dir, identity['spec'], stage)

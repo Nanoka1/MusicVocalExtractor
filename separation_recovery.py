@@ -1,10 +1,10 @@
-"""Task identity, checkpoint discovery and explicit adoption of logged legacy WAVs."""
+"""Current-task provenance and creation; historical work is never discovered."""
 import importlib.metadata
-import shutil
-import tempfile
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
-from task_checkpoint import atomic_json, digest, identity_matches, model_signature, read_json, wav_record
+from task_checkpoint import atomic_json, digest, model_signature, wav_record
 
 
 def identity(audio, model, model_dir, settings):
@@ -23,33 +23,18 @@ def identity(audio, model, model_dir, settings):
 
 
 def choose_work(root, expected, resume_work, stage):
-    from vocal_split import BVE_MODEL
-    def matches(state):
-        # The base checkpoint predates a first-ever BVE download. It did not use
-        # those missing files; completed BVE blocks validate their own fingerprints.
-        allowed = (BVE_MODEL, 'vr_model_data.json') if state.get('base') else ()
-        return identity_matches(state['identity'], expected, allowed)
-
-    if resume_work:
-        folder = Path(resume_work).resolve()
-        if folder.parent != root.resolve() or not folder.name.startswith('work_'):
-            raise ValueError('恢复路径必须是 cache/separation 下的 work_* 任务目录。')
-        state = read_json(folder / 'task.json')
-        if not matches(state):
-            raise ValueError('任务输入、模型、参数或运行版本不匹配，拒绝复用。')
-        stage(f'恢复任务：{folder}；正在逐文件重新校验')
-        return folder, state
-    for folder in sorted(root.glob('work_*'), key=lambda p: p.stat().st_mtime_ns, reverse=True):
-        try:
-            state = read_json(folder / 'task.json')
-            if matches(state) and state.get('status') != 'complete':
-                stage(f'发现可恢复任务：{folder}；正在逐文件重新校验')
-                return folder, state
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    folder = Path(tempfile.mkdtemp(prefix='work_', dir=root))
-    state = dict(identity=expected, status='created')
+    """Always reserve a new UUID directory, including for legacy callers."""
+    root = Path(root)
+    root.mkdir(parents=True, exist_ok=True)
+    if resume_work is not None:
+        stage('旧任务恢复已停用；忽略恢复路径，本次从零开始。')
+    task_id = 'work_' + uuid.uuid4().hex
+    folder = root / task_id
+    folder.mkdir()  # Atomic reservation; never open or overwrite another task.
+    state = dict(task_id=task_id, identity=expected, status='created',
+                 created_at=datetime.now(timezone.utc).isoformat(), restart_policy='always_new')
     atomic_json(folder / 'task.json', state)
+    stage(f'新任务：{task_id}；独立工作目录：{folder}；从零开始分离')
     return folder, state
 
 
@@ -65,29 +50,3 @@ def base_records(stems, folder, timeline):
             or abs(specs[0][0] - expected_frames) > 2048):
         raise ValueError('第一阶段音轨长度、采样率或声道与原曲不一致。')
     return records
-
-
-def adopt_legacy(legacy, log_path, audio, folder, model, timeline, stage):
-    """No saved calculation state exists: import only fully checked WAV artifacts."""
-    legacy, log_path, audio = Path(legacy).resolve(), Path(log_path).resolve(), Path(audio).resolve()
-    if not legacy.is_dir() or not log_path.is_file():
-        raise ValueError('旧任务目录或来源日志不存在。')
-    log = log_path.read_text(encoding='utf-8', errors='replace')
-    source_event = 'Processing file: ' + str(audio)
-    bve_event = 'Processing file: ' + str(legacy / 'Vocals.wav')
-    if source_event not in log or bve_event not in log or model not in log:
-        raise ValueError('日志没有证明原始音频、第一阶段模型与旧人声缓存的关联，拒绝自动采用。')
-    if log.index(source_event) >= log.index(bve_event):
-        raise ValueError('旧日志的处理阶段顺序不一致。')
-    original = {label: legacy / f'{label}.wav' for label in ('Vocals', 'Instrumental')}
-    base_records(original, legacy, timeline)
-    destination = Path(tempfile.mkdtemp(prefix='legacy_import_', dir=folder))
-    stems = {}
-    for label, path in original.items():
-        stems[label] = destination / path.name
-        shutil.copy2(path, stems[label])
-        if digest(stems[label]) != digest(path):
-            raise ValueError('旧任务 WAV 复制校验失败；原文件仍保留。')
-    stage('已采用日志关联且全量校验通过的第一阶段 WAV；旧任务未保存 BVE 计算状态，第二阶段从第 1 块开始。')
-    return stems, dict(directory=str(legacy), log=str(log_path), log_sha256=digest(log_path),
-                       limitation='旧版未保存参数快照；只核实日志模型名称、输入关联和实际 WAV，不声称恢复旧计算状态。')

@@ -264,26 +264,32 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
     settings = dict(model=model_name, options=options, device=selected, output_format=output_format,
                     performance_mode=performance_mode, vocal_gain_db=vocal_gain_db,
                     instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix, split_backing=split_backing)
-    with phase(stage, "正在校验输入、模型与任务检查点指纹"):
+    if legacy_work is not None or legacy_log is not None:
+        stage('旧任务导入已停用；忽略旧缓存与来源日志，本次从零开始。')
+    with phase(stage, "正在创建全新任务并记录本次输入与模型信息"):
         signature = lambda: identity(audio_path, model_name, MODEL_DIR, settings)
         work_dir, checkpoint = choose_work(work_root, signature(), resume_work, stage)
+    stats.update(task_id=checkpoint['task_id'], resumed_base=False)
+    lock_path = work_root / (work_dir.name + '.lock')
+    acquired = False
     try:
         # Lock outside the work tree so success cleanup cannot remove an open Windows lock.
-        with FileLock(str(work_root / (work_dir.name + '.lock')), timeout=0):
-            # Re-read after taking the lock; discovery is only a read-only hint.
-            from task_checkpoint import read_json
-            checkpoint = read_json(work_dir / 'task.json')
+        with FileLock(str(lock_path), timeout=0):
+            acquired = True
+            # State belongs to the directory created above; no disk checkpoint is read.
             try:
                 outputs = _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
                                          output_format, tools, stage, original_name, selected == "cpu", torch,
                                          options=options, metrics=stats, vocal_gain_db=vocal_gain_db,
                                          instrumental_gain_db=instrumental_gain_db, prepare_mix=prepare_mix,
-                                         split_backing=split_backing, checkpoint=checkpoint, signature=signature,
-                                         legacy_work=legacy_work, legacy_log=legacy_log)
+                                         split_backing=split_backing, checkpoint=checkpoint, signature=signature)
             except (Exception, SystemExit) as error:
                 if work_dir.exists():
                     checkpoint.update(status='failed', error=str(error))
-                    atomic_json(work_dir / 'task.json', checkpoint)
+                    try:
+                        atomic_json(work_dir / 'task.json', checkpoint)
+                    except OSError as record_error:
+                        stage(f'本次失败信息未能写入磁盘：{record_error}；原始错误：{error}')
                 raise
         stats["total_seconds"] = time.perf_counter() - total_start
         if selected == "cuda":
@@ -292,8 +298,15 @@ def separate_audio(audio_path, output_dir=OUTPUT_DIR, cpu=False, model_name=DEFA
             metrics_callback(stats)
         return outputs
     except (Exception, SystemExit) as error:
-        stage(f"任务失败；通过校验的检查点已保留：{work_dir}")
-        raise RuntimeError(f"分离失败：{error}。恢复材料保留在：{work_dir}") from error
+        detail = str(error).strip() or type(error).__name__
+        stage(f"新任务 {work_dir.name} 失败：{detail}；本次诊断文件保留：{work_dir}；再次开始将创建新任务。")
+        raise RuntimeError(f"分离失败（{type(error).__name__}）：{detail}。本次临时目录：{work_dir}；下次从零开始。") from error
+    finally:
+        if acquired:
+            try:
+                lock_path.unlink(missing_ok=True)
+            except OSError:
+                stage(f'本次任务已退出，锁文件暂未移除：{lock_path}')
 
 
 def _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, options, metrics):
@@ -328,11 +341,11 @@ def _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, 
 def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
                    output_format, tools, stage, original_name, cpu, torch, options=None, metrics=None,
                    vocal_gain_db=0, instrumental_gain_db=0, prepare_mix=False, split_backing=False,
-                   checkpoint=None, signature=None, legacy_work=None, legacy_log=None):
+                   checkpoint=None, signature=None):
     metrics = metrics if metrics is not None else {}
     selected = "cpu" if cpu else "cuda"
-    from task_checkpoint import atomic_json, checked_paths
-    from separation_recovery import adopt_legacy, base_records
+    from task_checkpoint import atomic_json
+    from separation_recovery import base_records
     from mix_tracks import song_timeline
 
     if checkpoint is not None:
@@ -340,22 +353,13 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
         from input_audio import task_input
         model_audio, original_timeline, stems = task_input(audio_path, work_dir, attempt,
                                                           checkpoint, tools, stage)
-        if stems is not None:
-            metrics.update(prepare_seconds=0, inference_seconds=0, resumed_base=True)
-        elif legacy_work:
-            with phase(stage, '正在校验旧任务日志及完整 WAV；原缓存保持保留'):
-                stems, provenance = adopt_legacy(legacy_work, legacy_log, audio_path, work_dir,
-                                                 model_name, original_timeline, stage)
-            checkpoint['legacy'] = provenance
-            metrics.update(prepare_seconds=0, inference_seconds=0, resumed_base=True)
-        if stems is None:
-            base_dir = Path(tempfile.mkdtemp(prefix='base_', dir=work_dir))
-            stems = _base_stems(Separator, model_audio, base_dir, model_name, stage, cpu, torch, options, metrics)
-        with phase(stage, '第一阶段后处理：完整校验并保存人声及伴奏检查点'):
+        base_dir = Path(tempfile.mkdtemp(prefix='base_', dir=work_dir))
+        stems = _base_stems(Separator, model_audio, base_dir, model_name, stage, cpu, torch, options, metrics)
+        with phase(stage, '第一阶段后处理：完整校验本次人声及伴奏'):
             checkpoint.update(base=base_records(stems, work_dir, original_timeline),
                               identity=signature(), status='base_complete')
             atomic_json(work_dir / 'task.json', checkpoint)
-        stage('第一阶段检查点已保存；后续失败可直接从第二阶段继续')
+        stage('本次第一阶段音轨已校验；正在继续当前任务，不复用历史缓存')
     else:
         attempt = work_dir
         stems = _base_stems(Separator, audio_path, work_dir, model_name, stage, cpu, torch, options, metrics)
@@ -413,12 +417,19 @@ def _separate_task(Separator, audio_path, output_dir, work_dir, model_name,
         if not any(result_dir.iterdir()):
             result_dir.rmdir()
         raise
-    if checkpoint is not None and checkpoint.get('preserve_work'):
+    if checkpoint is not None:
         checkpoint.update(status='complete', outputs=list(map(str, outputs)))
         atomic_json(work_dir / 'task.json', checkpoint)
-        stage(f'本任务缓存及检查点按要求完整保留：{work_dir}')
-    else:
+        if checkpoint.get('task_id') != work_dir.name or work_dir.resolve().parent != (DATA_DIR / 'cache/separation').resolve():
+            raise RuntimeError('当前任务临时目录归属不明，拒绝清理。')
+    if any(Path(p).resolve().is_relative_to(work_dir.resolve()) for p in (*outputs, audio_path, MODEL_DIR)):
+        raise RuntimeError('临时目录包含需保留的输入、模型或最终输出，拒绝清理。')
+    try:
         shutil.rmtree(work_dir)
+    except OSError as error:
+        stage(f'分离结果已完成验证；本次临时文件暂未清理：{work_dir}；原因：{error}')
+    else:
+        stage(f'已清理本次任务临时文件：{work_dir.name}')
     metrics["export_seconds"] = time.perf_counter() - export_start
     stage("分离完成")
     return outputs
@@ -435,9 +446,9 @@ def main():
     parser.add_argument("--format", choices=["MP3"], default="MP3")
     parser.add_argument("--performance", choices=["quality", "balanced", "fast"], default="balanced")
     parser.add_argument("--split-backing", action="store_true", help="进一步分离主唱与和声")
-    parser.add_argument("--resume-work", type=Path, help="显式指定 cache/separation/work_* 检查点；默认自动匹配")
-    parser.add_argument("--legacy-work", type=Path, help="采用旧版完整第一阶段 WAV；必须同时提供原曲和来源日志")
-    parser.add_argument("--legacy-log", type=Path, help="能关联原曲、模型与旧人声 WAV 的原任务日志")
+    parser.add_argument("--resume-work", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--legacy-work", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--legacy-log", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--vocal-gain-db", type=validate_gain, default=0,
                         help="分离后人声增益，0～12 dB；正增益启用前瞻峰值保护")
     parser.add_argument("--instrumental-gain-db", type=validate_gain, default=0,
